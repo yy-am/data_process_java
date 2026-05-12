@@ -1,0 +1,23 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: data-process-java
+  ai:
+    dashscope:
+      api-key: ${AI_DASHSCOPE_API_KEY:}
+      chat:
+        options:
+          model: qwen-max
+
+app:
+  spring-ai-alibaba:
+    enabled: true
+    skills-classpath-path: skills
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
