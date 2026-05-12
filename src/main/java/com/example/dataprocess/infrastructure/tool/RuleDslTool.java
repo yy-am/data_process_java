@@ -1,12 +1,14 @@
 package com.example.dataprocess.infrastructure.tool;
 
 import com.example.dataprocess.domain.model.FinalDsl;
+import com.example.dataprocess.infrastructure.runtime.SkillExecutionStateHolder;
 import com.example.dataprocess.interfaces.restful.request.FieldMappingDecisionDto;
 import com.example.dataprocess.interfaces.restful.request.InputFieldDecisionDto;
 import com.example.dataprocess.interfaces.restful.request.OptionFieldDecisionDto;
 import com.example.dataprocess.interfaces.restful.request.UserConfirmationRequest;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
@@ -14,15 +16,24 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 规则 DSL 工具，提供规则知识和 DSL 骨架上下文。
+ * 规则 DSL 工具，负责向模型暴露规则上下文，并在降级场景下生成 DSL。
  */
 @Component
 public class RuleDslTool {
 
     private final ObjectMapper objectMapper;
+    private final SkillExecutionStateHolder stateHolder;
 
-    public RuleDslTool(ObjectMapper objectMapper) {
+    public RuleDslTool(ObjectMapper objectMapper, SkillExecutionStateHolder stateHolder) {
         this.objectMapper = objectMapper;
+        this.stateHolder = stateHolder;
+    }
+
+    @Tool(name = "ruleDslTool", description = "Load rule knowledge and DSL skeleton for the currently selected template.")
+    public Map<String, Object> loadCurrentRuleContext() {
+        return loadRuleContext(
+                stateHolder.getRequiredCurrentState().templateRecognitionResult().templateCode()
+        );
     }
 
     public Map<String, Object> loadRuleContext(String templateCode) {

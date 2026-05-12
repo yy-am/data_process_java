@@ -2,18 +2,24 @@ package com.example.dataprocess.infrastructure.runtime;
 
 import com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry;
 import com.alibaba.cloud.ai.graph.skills.registry.classpath.ClasspathSkillRegistry;
+import com.example.dataprocess.infrastructure.tool.ConfirmationConstraintTool;
+import com.example.dataprocess.infrastructure.tool.HeaderAliasTool;
+import com.example.dataprocess.infrastructure.tool.InputSnapshotTool;
+import com.example.dataprocess.infrastructure.tool.RuleDslTool;
+import com.example.dataprocess.infrastructure.tool.TemplateCatalogTool;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
- * 技能运行时配置类，负责装配技能注册表和分组工具。
+ * 技能运行时配置，负责注册 skill，并按 skill 维度装配允许暴露的工具。
  */
 @Configuration
 public class SkillRuntimeConfig {
@@ -46,30 +52,47 @@ public class SkillRuntimeConfig {
     @Bean
     public Map<String, List<ToolCallback>> groupedTools(
             Map<String, List<String>> skillAllowedTools,
-            TemplateRecognitionGroupedTools templateRecognitionGroupedTools,
-            ConfirmationQuestionGroupedTools confirmationQuestionGroupedTools,
-            RuleDraftingGroupedTools ruleDraftingGroupedTools
+            InputSnapshotTool inputSnapshotTool,
+            TemplateCatalogTool templateCatalogTool,
+            HeaderAliasTool headerAliasTool,
+            ConfirmationConstraintTool confirmationConstraintTool,
+            RuleDslTool ruleDslTool
     ) {
-        ToolCallback[] templateTools = MethodToolCallbackProvider.builder()
-                .toolObjects(templateRecognitionGroupedTools)
-                .build()
-                .getToolCallbacks();
-        ToolCallback[] confirmationTools = MethodToolCallbackProvider.builder()
-                .toolObjects(confirmationQuestionGroupedTools)
-                .build()
-                .getToolCallbacks();
-        ToolCallback[] ruleTools = MethodToolCallbackProvider.builder()
-                .toolObjects(ruleDraftingGroupedTools)
+        ToolCallback[] allCallbacks = MethodToolCallbackProvider.builder()
+                .toolObjects(
+                        inputSnapshotTool,
+                        templateCatalogTool,
+                        headerAliasTool,
+                        confirmationConstraintTool,
+                        ruleDslTool
+                )
                 .build()
                 .getToolCallbacks();
 
-        Map<String, List<ToolCallback>> grouped = Map.of(
-                "template-recognition", Arrays.asList(templateTools),
-                "confirmation-question", Arrays.asList(confirmationTools),
-                "rule-drafting", Arrays.asList(ruleTools)
-        );
+        Map<String, ToolCallback> callbacksByName = List.of(allCallbacks).stream()
+                .collect(Collectors.toMap(
+                        callback -> callback.getToolDefinition().name(),
+                        Function.identity(),
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
+
+        Map<String, List<ToolCallback>> grouped = new LinkedHashMap<>();
+        for (Map.Entry<String, List<String>> entry : skillAllowedTools.entrySet()) {
+            List<ToolCallback> callbacks = entry.getValue().stream()
+                    .map(toolName -> {
+                        ToolCallback callback = callbacksByName.get(toolName);
+                        if (callback == null) {
+                            throw new IllegalStateException("Missing tool callback: " + toolName);
+                        }
+                        return callback;
+                    })
+                    .toList();
+            grouped.put(entry.getKey(), callbacks);
+        }
+
         validateGroupedTools(grouped, skillAllowedTools);
-        return grouped;
+        return Map.copyOf(grouped);
     }
 
     private void validateGroupedTools(

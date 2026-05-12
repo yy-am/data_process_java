@@ -7,16 +7,29 @@ import com.example.dataprocess.domain.model.SourceFieldCandidate;
 import com.example.dataprocess.domain.model.TaskSession;
 import com.example.dataprocess.domain.model.UnclearMappingQuestion;
 import com.example.dataprocess.domain.model.UserConfirmationItems;
+import com.example.dataprocess.infrastructure.runtime.SkillExecutionStateHolder;
+import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.Map;
 
 /**
- * 确认约束工具，提供确认问题所需的约束和候选信息。
+ * 确认约束工具，负责向模型暴露用户确认阶段可用的约束和备选项。
  */
 @Component
 public class ConfirmationConstraintTool {
+
+    private final SkillExecutionStateHolder stateHolder;
+
+    public ConfirmationConstraintTool(SkillExecutionStateHolder stateHolder) {
+        this.stateHolder = stateHolder;
+    }
+
+    @Tool(name = "confirmationConstraintTool", description = "Load the confirmation constraints and option ranges for the current task.")
+    public Map<String, Object> loadCurrentConfirmationConstraints() {
+        return loadConfirmationConstraints(stateHolder.getRequiredCurrentState().toTaskSession());
+    }
 
     public Map<String, Object> loadConfirmationConstraints(TaskSession session) {
         return Map.of(

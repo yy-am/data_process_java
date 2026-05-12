@@ -16,6 +16,11 @@ import java.util.Map;
 @Component
 public class SkillRuntimeHealthCheck {
 
+    private static final List<String> ALLOWED_TOOLS_HEADINGS = List.of(
+            "## Allowed Tools",
+            "## 允许使用的工具"
+    );
+
     private final Map<String, List<String>> skillAllowedTools;
 
     public SkillRuntimeHealthCheck(Map<String, List<String>> skillAllowedTools) {
@@ -49,7 +54,7 @@ public class SkillRuntimeHealthCheck {
         boolean inAllowedTools = false;
         for (String rawLine : content.split("\\R")) {
             String line = rawLine.trim();
-            if (line.equals("## Allowed Tools")) {
+            if (ALLOWED_TOOLS_HEADINGS.contains(line)) {
                 inAllowedTools = true;
                 continue;
             }

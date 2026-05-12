@@ -45,6 +45,7 @@ import static com.alibaba.cloud.ai.graph.action.AsyncNodeAction.node_async;
 public class DataProcessingStateGraphDefinition {
 
     private static final String TASK_ID = "task_id";
+    private static final String INPUT_TYPE = "input_type";
     private static final String SOURCE_HEADERS = "source_headers";
     private static final String SAMPLE_ROWS = "sample_rows";
     private static final String INPUT_SNAPSHOT = "input_snapshot";
@@ -97,12 +98,13 @@ public class DataProcessingStateGraphDefinition {
     }
 
     /**
-     * 定义图状态字段的合并策略。
+     * 为 StateGraph 的每个状态字段声明合并策略。
      */
     public KeyStrategyFactory keyStrategyFactory() {
         return () -> {
             HashMap<String, KeyStrategy> strategies = new HashMap<>();
             strategies.put(TASK_ID, new ReplaceStrategy());
+            strategies.put(INPUT_TYPE, new ReplaceStrategy());
             strategies.put(SOURCE_HEADERS, new ReplaceStrategy());
             strategies.put(SAMPLE_ROWS, new ReplaceStrategy());
             strategies.put(INPUT_SNAPSHOT, new ReplaceStrategy());
@@ -127,6 +129,7 @@ public class DataProcessingStateGraphDefinition {
     public CompiledGraph build() throws GraphStateException {
         StateGraph workflow = new StateGraph(keyStrategyFactory())
                 .addNode(BUILD_INPUT_SNAPSHOT_NODE, node_async(state -> {
+                    /* 首节点先把原始输入归一化，给后续模板识别和工具调用提供统一视图。 */
                     DataProcessingGraphState current = fromNativeState(state.data());
                     DataProcessingGraphState next = current.withInputSnapshot(buildInputSnapshotNode.execute(current));
                     return Map.of(
@@ -137,6 +140,7 @@ public class DataProcessingStateGraphDefinition {
                     );
                 }))
                 .addNode(TEMPLATE_RECOGNITION_NODE, node_async(state -> {
+                    /* 模板识别节点负责判定模板，并写入是否需要人工确认的信号。 */
                     DataProcessingGraphState current = fromNativeState(state.data());
                     TemplateRecognitionResult result = templateRecognitionSkillNode.execute(current);
                     return Map.of(
@@ -150,6 +154,7 @@ public class DataProcessingStateGraphDefinition {
                     );
                 }))
                 .addNode(NEED_USER_CONFIRMATION_ROUTER, node_async(state -> {
+                    /* 单独的路由节点只负责决定下一跳，避免业务节点承担分支控制。 */
                     DataProcessingGraphState current = fromNativeState(state.data());
                     String nextNode = resolveNextNodeAfterRecognition(current);
                     return Map.of(
@@ -159,6 +164,7 @@ public class DataProcessingStateGraphDefinition {
                     );
                 }))
                 .addNode(CONFIRMATION_QUESTION_NODE, node_async(state -> {
+                    /* 识别有歧义时，生成一份前端可直接渲染的确认问题集合。 */
                     DataProcessingGraphState current = fromNativeState(state.data());
                     UserConfirmationItems items = confirmationQuestionSkillNode.execute(current);
                     return Map.of(
@@ -170,12 +176,14 @@ public class DataProcessingStateGraphDefinition {
                     );
                 }))
                 .addNode(WAIT_USER_CONFIRMATION_NODE, node_async(state -> Map.of(
+                        /* 该节点只负责形成稳定中断点，真正的用户输入由 resume 接口补回状态。 */
                         CURRENT_NODE, WAIT_USER_CONFIRMATION_NODE,
                         WORKFLOW_STAGE, WorkflowStage.USER_CONFIRMATION_REQUIRED.name(),
                         NEXT_NODE, RULE_DRAFTING_NODE,
                         TRACE_LOGS, List.of("Waiting for user confirmation.")
                 )))
                 .addNode(RULE_DRAFTING_NODE, node_async(state -> {
+                    /* 规则起草节点结合模板、输入快照和用户确认结果输出 DSL 草案。 */
                     DataProcessingGraphState current = fromNativeState(state.data());
                     FinalDsl finalDsl = ruleDraftingSkillNode.execute(current);
                     return Map.of(
@@ -187,6 +195,7 @@ public class DataProcessingStateGraphDefinition {
                     );
                 }))
                 .addNode(DSL_VALIDATION_NODE, node_async(state -> {
+                    /* 校验失败则回退到起草节点重试，成功后再进入转换预览节点。 */
                     DataProcessingGraphState current = fromNativeState(state.data());
                     boolean valid = dslValidationNode.isValid(current);
                     String nextNode = valid ? DSL_TRANSFORMATION_NODE : RULE_DRAFTING_NODE;
@@ -198,6 +207,7 @@ public class DataProcessingStateGraphDefinition {
                     );
                 }))
                 .addNode(DSL_TRANSFORMATION_NODE, node_async(state -> {
+                    /* DSL 通过校验后先做预览转换，避免直接输出不可验证的最终结果。 */
                     DataProcessingGraphState current = fromNativeState(state.data());
                     var previewRows = dslTransformationNode.execute(current);
                     return Map.of(
@@ -209,6 +219,7 @@ public class DataProcessingStateGraphDefinition {
                     );
                 }))
                 .addNode(COMPLETE_NODE, node_async(state -> Map.of(
+                        /* 结束节点只负责收口状态，最终响应由 workflow 门面层统一组装。 */
                         WORKFLOW_STAGE, WorkflowStage.COMPLETED.name(),
                         CURRENT_NODE, COMPLETE_NODE,
                         TRACE_LOGS, List.of("Workflow completed.")
@@ -237,6 +248,7 @@ public class DataProcessingStateGraphDefinition {
 
         return workflow.compile(CompileConfig.builder()
                 .saverConfig(SaverConfig.builder().register(new MemorySaver()).build())
+                /* 在等待用户确认前中断，让前端先拿到题包，再通过 confirm 接口恢复执行。 */
                 .interruptBefore(WAIT_USER_CONFIRMATION_NODE)
                 .build());
     }
@@ -247,6 +259,7 @@ public class DataProcessingStateGraphDefinition {
     public Map<String, Object> toInitialState(TaskSession session) {
         return Map.of(
                 TASK_ID, session.taskId(),
+                INPUT_TYPE, session.inputType(),
                 SOURCE_HEADERS, session.sourceHeaders(),
                 SAMPLE_ROWS, session.sampleRows(),
                 WORKFLOW_STAGE, WorkflowStage.RECEIVED.name(),
@@ -274,6 +287,7 @@ public class DataProcessingStateGraphDefinition {
     public DataProcessingGraphState fromNativeState(Map<String, Object> state) {
         return new DataProcessingGraphState(
                 asString(state.get(TASK_ID)),
+                asString(state.getOrDefault(INPUT_TYPE, "table-import")),
                 convertList(state.get(SOURCE_HEADERS), new TypeReference<>() {
                 }),
                 convertList(state.get(SAMPLE_ROWS), new TypeReference<>() {

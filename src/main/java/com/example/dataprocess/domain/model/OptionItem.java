@@ -1,7 +1,10 @@
 package com.example.dataprocess.domain.model;
 
 /**
- * 选项项值对象。
+ * 用户可选项定义。
+ *
+ * @param code 选项编码
+ * @param label 选项展示文案
  */
 public record OptionItem(
         String code,

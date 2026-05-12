@@ -6,7 +6,10 @@ import jakarta.validation.constraints.NotEmpty;
 import java.util.List;
 
 /**
- * 字段映射确认请求项。
+ * 用户对字段映射问题的确认结果。
+ *
+ * @param targetFieldCode 目标字段编码
+ * @param selectedSourceFields 用户选中的源字段列表
  */
 public record FieldMappingDecisionDto(
         @NotBlank String targetFieldCode,

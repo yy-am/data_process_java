@@ -14,9 +14,26 @@ import java.util.Map;
 
 /**
  * StateGraph 运行时统一状态对象。
+ *
+ * @param taskId 任务唯一标识
+ * @param inputType 输入来源类型
+ * @param sourceHeaders 原始源表头
+ * @param sampleRows 样例数据行
+ * @param inputSnapshot 标准化输入快照
+ * @param templateRecognitionResult 模板识别结果
+ * @param userConfirmationItems 用户确认题包
+ * @param userConfirmationRequest 用户提交的确认结果
+ * @param finalDsl 最终 DSL 结果
+ * @param transformedPreviewRows 转换预览结果
+ * @param workflowStage 当前工作流阶段
+ * @param currentNode 当前执行节点名
+ * @param retryCount 重试次数
+ * @param errorMessages 累积错误信息
+ * @param traceLogs 累积执行轨迹
  */
 public record DataProcessingGraphState(
         String taskId,
+        String inputType,
         List<String> sourceHeaders,
         List<Map<String, String>> sampleRows,
         InputSnapshot inputSnapshot,
@@ -38,6 +55,7 @@ public record DataProcessingGraphState(
     public static DataProcessingGraphState from(TaskSession session) {
         return new DataProcessingGraphState(
                 session.taskId(),
+                session.inputType(),
                 session.sourceHeaders(),
                 session.sampleRows(),
                 null,
@@ -54,12 +72,10 @@ public record DataProcessingGraphState(
         );
     }
 
-    /**
-     * 写入输入快照并推进阶段。
-     */
     public DataProcessingGraphState withInputSnapshot(InputSnapshot newInputSnapshot) {
         return new DataProcessingGraphState(
                 taskId,
+                inputType,
                 sourceHeaders,
                 sampleRows,
                 newInputSnapshot,
@@ -76,15 +92,13 @@ public record DataProcessingGraphState(
         );
     }
 
-    /**
-     * 写入模板识别结果并推进阶段。
-     */
     public DataProcessingGraphState withTemplateRecognitionResult(TemplateRecognitionResult result) {
         WorkflowStage nextStage = Boolean.TRUE.equals(result.needUserConfirm())
                 ? WorkflowStage.USER_CONFIRMATION_REQUIRED
                 : WorkflowStage.TEMPLATE_RECOGNIZED;
         return new DataProcessingGraphState(
                 taskId,
+                inputType,
                 sourceHeaders,
                 sampleRows,
                 inputSnapshot,
@@ -101,12 +115,10 @@ public record DataProcessingGraphState(
         );
     }
 
-    /**
-     * 写入用户确认项。
-     */
     public DataProcessingGraphState withUserConfirmationItems(UserConfirmationItems items) {
         return new DataProcessingGraphState(
                 taskId,
+                inputType,
                 sourceHeaders,
                 sampleRows,
                 inputSnapshot,
@@ -123,12 +135,10 @@ public record DataProcessingGraphState(
         );
     }
 
-    /**
-     * 标记流程等待用户确认。
-     */
     public DataProcessingGraphState awaitingUserConfirmation() {
         return new DataProcessingGraphState(
                 taskId,
+                inputType,
                 sourceHeaders,
                 sampleRows,
                 inputSnapshot,
@@ -145,12 +155,10 @@ public record DataProcessingGraphState(
         );
     }
 
-    /**
-     * 写入用户确认请求内容。
-     */
     public DataProcessingGraphState withUserConfirmationRequest(UserConfirmationRequest request) {
         return new DataProcessingGraphState(
                 taskId,
+                inputType,
                 sourceHeaders,
                 sampleRows,
                 inputSnapshot,
@@ -167,12 +175,10 @@ public record DataProcessingGraphState(
         );
     }
 
-    /**
-     * 写入最终 DSL 草案。
-     */
     public DataProcessingGraphState withFinalDsl(FinalDsl newFinalDsl) {
         return new DataProcessingGraphState(
                 taskId,
+                inputType,
                 sourceHeaders,
                 sampleRows,
                 inputSnapshot,
@@ -189,12 +195,10 @@ public record DataProcessingGraphState(
         );
     }
 
-    /**
-     * 标记 DSL 校验通过。
-     */
     public DataProcessingGraphState withDslValidated() {
         return new DataProcessingGraphState(
                 taskId,
+                inputType,
                 sourceHeaders,
                 sampleRows,
                 inputSnapshot,
@@ -211,12 +215,10 @@ public record DataProcessingGraphState(
         );
     }
 
-    /**
-     * 写入转换后的预览结果。
-     */
     public DataProcessingGraphState withTransformedPreviewRows(List<Map<String, String>> previewRows) {
         return new DataProcessingGraphState(
                 taskId,
+                inputType,
                 sourceHeaders,
                 sampleRows,
                 inputSnapshot,
@@ -233,12 +235,10 @@ public record DataProcessingGraphState(
         );
     }
 
-    /**
-     * 标记整个流程完成。
-     */
     public DataProcessingGraphState completed() {
         return new DataProcessingGraphState(
                 taskId,
+                inputType,
                 sourceHeaders,
                 sampleRows,
                 inputSnapshot,
@@ -255,14 +255,12 @@ public record DataProcessingGraphState(
         );
     }
 
-    /**
-     * 记录错误并递增重试计数。
-     */
     public DataProcessingGraphState withError(String errorMessage) {
         List<String> updatedErrors = new ArrayList<>(errorMessages);
         updatedErrors.add(errorMessage);
         return new DataProcessingGraphState(
                 taskId,
+                inputType,
                 sourceHeaders,
                 sampleRows,
                 inputSnapshot,
@@ -279,11 +277,8 @@ public record DataProcessingGraphState(
         );
     }
 
-    /**
-     * 将图状态回写为领域层任务会话对象。
-     */
     public TaskSession toTaskSession() {
-        TaskSession session = TaskSession.newSession(taskId, sourceHeaders, sampleRows);
+        TaskSession session = TaskSession.newSession(taskId, inputType, sourceHeaders, sampleRows);
         if (templateRecognitionResult != null) {
             session = session.withTemplateRecognitionResult(templateRecognitionResult);
         }
@@ -296,9 +291,6 @@ public record DataProcessingGraphState(
         return session;
     }
 
-    /**
-     * 追加一条执行轨迹日志。
-     */
     private List<String> appendTrace(String message) {
         List<String> updated = new ArrayList<>(traceLogs);
         updated.add(message);
