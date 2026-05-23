@@ -97,6 +97,17 @@
 - 确认项整理
 - DSL 草拟
 
+其中必须进一步区分：
+
+- `TemplateRecognitionSkill`
+  负责发现最可能模板，并显式暴露识别中的不确定性
+- `ConfirmationQuestionSkill`
+  负责接住这些不确定性，并将其整理为一次性返回的用户确认题包
+
+一句话：
+
+`TemplateRecognitionSkill 负责发现不确定性，ConfirmationQuestionSkill 负责表达不确定性。`
+
 `skill` 不负责：
 
 - 决定主流程下一跳
@@ -162,6 +173,13 @@ Java 负责：
   - 校验通过 -> `DslTransformationNode`
   - 校验失败但可重试 -> 回到 `RuleDraftingSkillNode`
   - 缺少用户输入 -> 回到 `ConfirmationQuestionSkillNode`
+
+补充解释：
+
+- `TemplateRecognitionSkillNode` 的输出是“识别结论 + 未决字段声明”
+- `ConfirmationQuestionSkillNode` 的输出是“用户确认题包”
+- 前者不直接面向用户，后者直接面向用户确认环节
+- 前者决定“要不要问”，后者决定“问什么、怎么组织成一轮确认”
 
 ---
 
@@ -334,7 +352,14 @@ flowchart TD
 
 - `InputSnapshotTool 输入快照工具`
 - `TemplateCatalogTool 模板目录工具`
-- `HeaderAliasTool 表头别名工具`
+
+职责边界：
+
+- 负责模板识别
+- 负责输出 `needUserConfirm`
+- 负责输出 `unresolvedTargetFields`
+- 不负责生成用户确认问题
+- 不负责输出可直接展示给用户的确认包
 
 ## 9.2 Confirmation Question Skill
 
@@ -343,6 +368,14 @@ flowchart TD
 建议可见工具：
 
 - `ConfirmationConstraintTool 确认约束工具`
+
+职责边界：
+
+- 负责把模板识别阶段的未决项整理成 `UserConfirmationItems`
+- 负责一次性返回确认问题结构
+- 不负责重新识别模板
+- 不负责推翻 `TemplateRecognitionSkill` 的识别结论
+- 不负责起草 DSL
 
 ## 9.3 Rule Drafting Skill
 

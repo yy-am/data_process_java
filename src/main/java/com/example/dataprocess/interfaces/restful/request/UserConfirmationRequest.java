@@ -1,7 +1,7 @@
 package com.example.dataprocess.interfaces.restful.request;
 
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 
 import java.util.List;
 
@@ -17,8 +17,8 @@ import java.util.List;
 public record UserConfirmationRequest(
         @NotBlank String taskId,
         @NotBlank String templateCode,
-        @NotEmpty List<FieldMappingDecisionDto> mappingDecisions,
-        @NotEmpty List<OptionFieldDecisionDto> optionFieldDecisions,
-        @NotEmpty List<InputFieldDecisionDto> inputFieldDecisions
+        @NotNull List<FieldMappingDecisionDto> mappingDecisions,
+        @NotNull List<OptionFieldDecisionDto> optionFieldDecisions,
+        @NotNull List<InputFieldDecisionDto> inputFieldDecisions
 ) {
 }

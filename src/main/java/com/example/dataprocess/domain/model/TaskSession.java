@@ -12,6 +12,7 @@ import java.util.Map;
  * @param sampleRows 样例数据行
  * @param templateRecognitionResult 模板识别结果
  * @param userConfirmationItems 需要前端展示的确认项
+ * @param userConfirmationResult 用户提交并通过校验的确认结果
  * @param finalDsl 最终生成的 DSL
  */
 public record TaskSession(
@@ -21,11 +22,12 @@ public record TaskSession(
         List<Map<String, String>> sampleRows,
         TemplateRecognitionResult templateRecognitionResult,
         UserConfirmationItems userConfirmationItems,
+        UserConfirmationResult userConfirmationResult,
         FinalDsl finalDsl
 ) {
 
     /**
-     * 创建新的任务会话，并冻结输入样例，避免后续被外部修改。
+     * 创建新的任务会话，并冻结样例数据，避免后续被外部修改。
      */
     public static TaskSession newSession(
             String taskId,
@@ -40,6 +42,7 @@ public record TaskSession(
                 sampleRows.stream().map(Map::copyOf).toList(),
                 null,
                 null,
+                null,
                 null
         );
     }
@@ -48,20 +51,63 @@ public record TaskSession(
      * 回写模板识别结果。
      */
     public TaskSession withTemplateRecognitionResult(TemplateRecognitionResult result) {
-        return new TaskSession(taskId, inputType, sourceHeaders, sampleRows, result, userConfirmationItems, finalDsl);
+        return new TaskSession(
+                taskId,
+                inputType,
+                sourceHeaders,
+                sampleRows,
+                result,
+                userConfirmationItems,
+                userConfirmationResult,
+                finalDsl
+        );
     }
 
     /**
      * 回写用户确认项。
      */
     public TaskSession withUserConfirmationItems(UserConfirmationItems items) {
-        return new TaskSession(taskId, inputType, sourceHeaders, sampleRows, templateRecognitionResult, items, finalDsl);
+        return new TaskSession(
+                taskId,
+                inputType,
+                sourceHeaders,
+                sampleRows,
+                templateRecognitionResult,
+                items,
+                userConfirmationResult,
+                finalDsl
+        );
+    }
+
+    /**
+     * 回写用户确认结果。
+     */
+    public TaskSession withUserConfirmationResult(UserConfirmationResult result) {
+        return new TaskSession(
+                taskId,
+                inputType,
+                sourceHeaders,
+                sampleRows,
+                templateRecognitionResult,
+                userConfirmationItems,
+                result,
+                finalDsl
+        );
     }
 
     /**
      * 回写最终 DSL。
      */
     public TaskSession withFinalDsl(FinalDsl newFinalDsl) {
-        return new TaskSession(taskId, inputType, sourceHeaders, sampleRows, templateRecognitionResult, userConfirmationItems, newFinalDsl);
+        return new TaskSession(
+                taskId,
+                inputType,
+                sourceHeaders,
+                sampleRows,
+                templateRecognitionResult,
+                userConfirmationItems,
+                userConfirmationResult,
+                newFinalDsl
+        );
     }
 }

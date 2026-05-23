@@ -2,7 +2,7 @@ package com.example.dataprocess.application.workflow.node;
 
 import com.example.dataprocess.application.state.DataProcessingGraphState;
 import com.example.dataprocess.domain.model.InputSnapshot;
-import com.example.dataprocess.infrastructure.tool.InputSnapshotTool;
+import com.example.dataprocess.infrastructure.service.InputSnapshotService;
 import org.springframework.stereotype.Component;
 
 /**
@@ -11,16 +11,16 @@ import org.springframework.stereotype.Component;
 @Component
 public class BuildInputSnapshotNode {
 
-    private final InputSnapshotTool inputSnapshotTool;
+    private final InputSnapshotService inputSnapshotService;
 
-    public BuildInputSnapshotNode(InputSnapshotTool inputSnapshotTool) {
-        this.inputSnapshotTool = inputSnapshotTool;
+    public BuildInputSnapshotNode(InputSnapshotService inputSnapshotService) {
+        this.inputSnapshotService = inputSnapshotService;
     }
 
     /**
      * 基于当前任务会话生成标准输入快照。
      */
     public InputSnapshot execute(DataProcessingGraphState state) {
-        return inputSnapshotTool.loadInputSnapshot(state.toTaskSession());
+        return inputSnapshotService.build(state.toTaskSession());
     }
 }

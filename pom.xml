@@ -14,7 +14,7 @@
     <artifactId>data-process-java</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>data-process-java</name>
-    <description>Lightweight Spring AI Alibaba agent skeleton</description>
+    <description>Data processing workflow with single-step AI services and structured user confirmation</description>
 
     <properties>
         <java.version>21</java.version>

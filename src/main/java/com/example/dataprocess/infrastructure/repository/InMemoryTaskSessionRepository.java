@@ -25,7 +25,7 @@ public class InMemoryTaskSessionRepository implements TaskSessionRepository {
     public TaskSession findByTaskId(String taskId) {
         TaskSession session = store.get(taskId);
         if (session == null) {
-            throw new IllegalArgumentException("Task session not found: " + taskId);
+            throw new IllegalArgumentException("未找到任务会话: " + taskId);
         }
         return session;
     }

@@ -182,6 +182,22 @@ sequenceDiagram
 7. `Tool` 只在当前 skill 的允许范围内暴露给模型。
 8. `Workflow` 根据 skill 输出结果继续路由到下一节点。
 
+补充职责边界：
+
+- `TemplateRecognitionSkill`
+  负责识别模板，并输出是否需要用户确认以及哪些目标字段仍未决
+- `ConfirmationQuestionSkill`
+  负责把这些未决项整理成一次性返回的确认题包
+
+它们的关系不是并列重复判断，而是严格上下游：
+
+1. `TemplateRecognitionSkill` 先输出“识别结论 + 不确定性声明”
+2. `ConfirmationQuestionSkill` 再输出“面向用户的一轮确认包”
+
+一句话：
+
+`TemplateRecognitionSkill 决定要不要问，ConfirmationQuestionSkill 决定问什么。`
+
 ---
 
 ## 5. 评审时建议重点看什么
@@ -191,4 +207,3 @@ sequenceDiagram
 - `*SkillRuntime` 是否只负责“技能执行适配”，而不是承担主流程路由。
 - `groupedTools` 是否真正限制了每个 skill 的工具可见范围。
 - `DslValidationNode`、`DslTransformationNode` 是否仍然保持确定性执行，而不是重新交给模型判断。
-

@@ -2,7 +2,7 @@ package com.example.dataprocess.interfaces.restful;
 
 import com.example.dataprocess.application.workflow.DataProcessingStateGraphWorkflow;
 import com.example.dataprocess.domain.model.ParsedExcelContent;
-import com.example.dataprocess.infrastructure.tool.ExcelParsingTool;
+import com.example.dataprocess.infrastructure.service.ExcelParsingService;
 import com.example.dataprocess.interfaces.restful.request.DataProcessingTaskRequest;
 import com.example.dataprocess.interfaces.restful.request.DataProcessingTaskUploadRequest;
 import com.example.dataprocess.interfaces.restful.response.DataProcessingTaskResponse;
@@ -23,14 +23,14 @@ import org.springframework.web.bind.annotation.RestController;
 public class DataProcessingTaskSubmissionInterface {
 
     private final DataProcessingStateGraphWorkflow workflow;
-    private final ExcelParsingTool excelParsingTool;
+    private final ExcelParsingService excelParsingService;
 
     public DataProcessingTaskSubmissionInterface(
             DataProcessingStateGraphWorkflow workflow,
-            ExcelParsingTool excelParsingTool
+            ExcelParsingService excelParsingService
     ) {
         this.workflow = workflow;
-        this.excelParsingTool = excelParsingTool;
+        this.excelParsingService = excelParsingService;
     }
 
     /**
@@ -38,7 +38,7 @@ public class DataProcessingTaskSubmissionInterface {
      */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public DataProcessingTaskResponse submit(@Valid @ModelAttribute DataProcessingTaskUploadRequest request) {
-        ParsedExcelContent parsedExcelContent = excelParsingTool.parse(
+        ParsedExcelContent parsedExcelContent = excelParsingService.parse(
                 request.excelFile(),
                 request.sheetName(),
                 request.sheetIndex(),

@@ -13,7 +13,10 @@ import com.example.dataprocess.interfaces.restful.response.UserConfirmationRespo
 import org.springframework.stereotype.Service;
 
 /**
- * 数据加工 StateGraph 工作流门面，负责启动和恢复同一条流程。
+ * 数据加工 StateGraph 工作流门面。
+ *
+ * <p>当前一期只负责驱动“样本解析后进入模板识别、结构化确认、DSL 生成”这条链路，
+ * 不负责重新获取全量 Excel，也不负责数据加工执行和导出。</p>
  */
 @Service
 public class DataProcessingStateGraphWorkflow {
@@ -39,20 +42,25 @@ public class DataProcessingStateGraphWorkflow {
      * 提交任务并启动首次 StateGraph 执行。
      */
     public DataProcessingTaskResponse start(DataProcessingTaskRequest request) {
-        /* 先把文件解析后的标准化输入沉淀成会话，后续节点统一从会话读取上下文。 */
+        // 一期任务会话只保留表头和少量样本数据，不持有全量 Excel 内容。
         TaskSession session = taskSessionRepository.save(
-                TaskSession.newSession(request.taskId(), request.inputType(), request.sourceHeaders(), request.sampleRows())
+                TaskSession.newSession(
+                        request.taskId(),
+                        request.inputType(),
+                        request.sourceHeaders(),
+                        request.sampleRows()
+                )
         );
 
-        /* taskId 直接作为 threadId，确保 start 和 resume 都命中同一条图执行链。 */
+        // taskId 直接作为 threadId，确保 start 和 resume 命中同一条流程实例。
         RunnableConfig config = RunnableConfig.builder()
                 .threadId(session.taskId())
                 .build();
 
-        /* 首次执行从初始状态启动，直到命中中断点或自然完成。 */
+        // 首次执行从初始状态启动，直到命中等待确认节点或自然完成。
         compiledGraph.stream(definition.toInitialState(session), config).blockLast();
 
-        /* 把原生状态映射回业务状态，再持久化给接口层和后续排障使用。 */
+        // 将最新图状态回写到图状态仓储和任务会话仓储，保证后续 resume 可继续使用。
         DataProcessingGraphState completedState = graphStateRepository.save(
                 definition.fromNativeState(compiledGraph.getState(config).state().data())
         );
@@ -61,7 +69,8 @@ public class DataProcessingStateGraphWorkflow {
         return new DataProcessingTaskResponse(
                 completedState.workflowStage(),
                 completedState.templateRecognitionResult(),
-                completedState.userConfirmationItems()
+                completedState.userConfirmationItems(),
+                completedState.finalDsl()
         );
     }
 
@@ -69,7 +78,7 @@ public class DataProcessingStateGraphWorkflow {
      * 接收用户确认结果并恢复 StateGraph 执行。
      */
     public UserConfirmationResponse resume(UserConfirmationRequest request) {
-        /* 先校验任务和图状态都存在，避免对不存在的线程做 update。 */
+        // 显式校验任务和图状态都存在，避免对不存在的流程做更新。
         taskSessionRepository.findByTaskId(request.taskId());
         graphStateRepository.findByTaskId(request.taskId());
 
@@ -79,16 +88,16 @@ public class DataProcessingStateGraphWorkflow {
 
         RunnableConfig updatedConfig;
         try {
-            /* 将用户补充信息写入 checkpoint，然后从等待节点继续向后推进。 */
+            // 把用户提交的结构化确认结果写入 checkpoint，然后从等待确认节点继续推进。
             updatedConfig = compiledGraph.updateState(config, definition.toResumeUpdate(request), null);
         } catch (Exception ex) {
-            throw new IllegalStateException("Failed to update native StateGraph state for user confirmation.", ex);
+            throw new IllegalStateException("写入用户确认结果并恢复 StateGraph 失败。", ex);
         }
 
-        /* resume 场景不再注入初始输入，直接基于更新后的线程状态续跑。 */
+        // resume 场景不再注入初始输入，直接基于更新后的线程状态继续执行。
         compiledGraph.stream(null, updatedConfig).blockLast();
 
-        /* 再次映射执行后的图状态，返回最终 DSL 和预览结果。 */
+        // 当前阶段只回传流程状态和 DSL，不再包含执行结果或导出结果。
         DataProcessingGraphState completedState = graphStateRepository.save(
                 definition.fromNativeState(compiledGraph.getState(updatedConfig).state().data())
         );
@@ -96,8 +105,7 @@ public class DataProcessingStateGraphWorkflow {
 
         return new UserConfirmationResponse(
                 completedState.workflowStage(),
-                completedState.finalDsl(),
-                completedState.transformedPreviewRows()
+                completedState.finalDsl()
         );
     }
 }

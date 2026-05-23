@@ -1,7 +1,10 @@
 package com.example.dataprocess.domain.model;
 
 /**
- * 工作流阶段枚举。
+ * 一期数据加工流程阶段枚举。
+ *
+ * <p>当前只覆盖从接收请求到生成 DSL 结束的状态，
+ * 不包含全量数据加工和导出阶段。</p>
  */
 public enum WorkflowStage {
     RECEIVED,
@@ -10,7 +13,5 @@ public enum WorkflowStage {
     USER_CONFIRMATION_REQUIRED,
     USER_CONFIRMED,
     DSL_DRAFTED,
-    DSL_VALIDATED,
-    TRANSFORMED,
     COMPLETED
 }

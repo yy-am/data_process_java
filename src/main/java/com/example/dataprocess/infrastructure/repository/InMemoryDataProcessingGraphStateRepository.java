@@ -25,7 +25,7 @@ public class InMemoryDataProcessingGraphStateRepository implements DataProcessin
     public DataProcessingGraphState findByTaskId(String taskId) {
         DataProcessingGraphState state = store.get(taskId);
         if (state == null) {
-            throw new IllegalArgumentException("Graph state not found: " + taskId);
+            throw new IllegalArgumentException("未找到任务图状态: " + taskId);
         }
         return state;
     }
