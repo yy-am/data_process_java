@@ -10,15 +10,15 @@ import java.util.List;
  *
  * @param taskId 当前任务 ID
  * @param templateCode 当前模板编码
- * @param mappingDecisions 字段映射确认结果
- * @param optionFieldDecisions 枚举字段确认结果
- * @param inputFieldDecisions 输入字段确认结果
+ * @param mappingConfirmations 字段映射确认结果
+ * @param optionConfirmations 枚举字段确认结果
+ * @param inputConfirmations 输入字段确认结果
  */
 public record UserConfirmationRequest(
         @NotBlank String taskId,
         @NotBlank String templateCode,
-        @NotNull List<FieldMappingDecisionDto> mappingDecisions,
-        @NotNull List<OptionFieldDecisionDto> optionFieldDecisions,
-        @NotNull List<InputFieldDecisionDto> inputFieldDecisions
+        @NotNull List<MappingConfirmationDto> mappingConfirmations,
+        @NotNull List<OptionConfirmationDto> optionConfirmations,
+        @NotNull List<InputConfirmationDto> inputConfirmations
 ) {
 }

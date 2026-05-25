@@ -10,6 +10,10 @@ import java.util.List;
  *
  * <p>一期先用显式内置目录承载模板事实，避免在代码里埋隐式推断。
  * 后续如果切换到配置中心或文档仓储，只需要替换这一层。</p>
+ *
+ * <p>当前模板目录的人工维护镜像文档位于：
+ * {@code src/main/resources/catalog/TEMPLATE_CATALOG.md}。
+ * 该文档用于评审和维护，不作为运行时自动加载源。</p>
  */
 @Service
 public class TemplateCatalogService {

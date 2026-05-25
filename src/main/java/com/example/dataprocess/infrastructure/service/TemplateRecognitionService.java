@@ -1,6 +1,5 @@
 package com.example.dataprocess.infrastructure.service;
 
-import com.example.dataprocess.domain.model.HeaderAlias;
 import com.example.dataprocess.domain.model.InputSnapshot;
 import com.example.dataprocess.domain.model.TemplateCatalogItem;
 import com.example.dataprocess.domain.model.TemplateRecognitionResult;
@@ -21,6 +20,10 @@ import java.util.stream.Collectors;
  *
  * <p>一期保持为单步 AI 服务。它只做一次模板识别调用，
  * 不引入 skill，不做多轮对话，也不对模型结果做隐式补值。</p>
+ *
+ * <p>当前提示词的人工维护镜像文档位于：
+ * {@code src/main/resources/prompts/template-recognition-prompt.md}。
+ * 该文档用于评审和维护，不作为运行时自动加载源。</p>
  */
 @Service
 public class TemplateRecognitionService {
@@ -28,18 +31,15 @@ public class TemplateRecognitionService {
     private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
     private final TemplateCatalogService templateCatalogService;
-    private final HeaderAliasService headerAliasService;
 
     public TemplateRecognitionService(
             ChatModel chatModel,
             ObjectMapper objectMapper,
-            TemplateCatalogService templateCatalogService,
-            HeaderAliasService headerAliasService
+            TemplateCatalogService templateCatalogService
     ) {
         this.chatModel = chatModel;
         this.objectMapper = objectMapper;
         this.templateCatalogService = templateCatalogService;
-        this.headerAliasService = headerAliasService;
     }
 
     /**
@@ -47,12 +47,11 @@ public class TemplateRecognitionService {
      */
     public TemplateRecognitionResult recognize(InputSnapshot inputSnapshot) {
         List<TemplateCatalogItem> templateCatalog = templateCatalogService.readTemplateCatalog(inputSnapshot.inputType());
-        List<HeaderAlias> headerAliases = headerAliasService.lookupHeaderAliases(inputSnapshot.normalizedHeaders());
 
         TemplateRecognitionResult result = ChatClient.create(chatModel)
                 .prompt()
                 .system(buildSystemPrompt())
-                .user(buildUserPrompt(inputSnapshot, templateCatalog, headerAliases))
+                .user(buildUserPrompt(inputSnapshot, templateCatalog))
                 .call()
                 .entity(TemplateRecognitionResult.class);
 
@@ -84,13 +83,11 @@ public class TemplateRecognitionService {
      */
     private String buildUserPrompt(
             InputSnapshot inputSnapshot,
-            List<TemplateCatalogItem> templateCatalog,
-            List<HeaderAlias> headerAliases
+            List<TemplateCatalogItem> templateCatalog
     ) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("inputSnapshot", inputSnapshot);
         payload.put("templateCatalog", templateCatalog);
-        payload.put("headerAliases", headerAliases);
 
         return """
                 请基于下面的上下文做模板识别，返回纯 JSON：

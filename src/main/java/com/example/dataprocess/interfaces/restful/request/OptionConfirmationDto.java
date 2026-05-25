@@ -3,12 +3,12 @@ package com.example.dataprocess.interfaces.restful.request;
 import jakarta.validation.constraints.NotBlank;
 
 /**
- * 用户对枚举型字段的确认结果。
+ * 用户对枚举确认项的提交结果。
  *
- * @param fieldCode 待确认字段编码
- * @param selectedValue 用户选择的枚举值
+ * @param fieldCode 字段编码
+ * @param selectedValue 用户选择的值
  */
-public record OptionFieldDecisionDto(
+public record OptionConfirmationDto(
         @NotBlank String fieldCode,
         @NotBlank String selectedValue
 ) {

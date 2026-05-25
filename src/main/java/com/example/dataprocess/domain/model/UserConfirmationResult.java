@@ -7,15 +7,15 @@ import java.util.List;
  *
  * @param taskId 当前任务 ID
  * @param templateCode 当前模板编码
- * @param mappingDecisions 字段映射确认结果
- * @param optionFieldDecisions 枚举字段确认结果
- * @param inputFieldDecisions 手工输入字段确认结果
+ * @param mappingConfirmations 已确认的字段映射项
+ * @param optionConfirmations 已确认的枚举字段项
+ * @param inputConfirmations 已确认的输入字段项
  */
 public record UserConfirmationResult(
         String taskId,
         String templateCode,
-        List<FieldMappingDecision> mappingDecisions,
-        List<OptionFieldDecision> optionFieldDecisions,
-        List<InputFieldDecision> inputFieldDecisions
+        List<MappingConfirmation> mappingConfirmations,
+        List<OptionConfirmation> optionConfirmations,
+        List<InputConfirmation> inputConfirmations
 ) {
 }

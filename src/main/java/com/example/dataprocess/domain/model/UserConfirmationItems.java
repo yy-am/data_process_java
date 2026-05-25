@@ -7,15 +7,15 @@ import java.util.List;
  *
  * @param taskId 当前任务 ID
  * @param templateCode 当前模板编码
- * @param unclearMappings 待确认的字段映射问题
- * @param requiredOptionFields 待选择的枚举型字段问题
- * @param requiredInputFields 待填写的自由输入字段问题
+ * @param mappingConfirmations 待确认的字段映射项
+ * @param optionConfirmations 待选择的枚举字段项
+ * @param inputConfirmations 待填写的输入字段项
  */
 public record UserConfirmationItems(
         String taskId,
         String templateCode,
-        List<UnclearMappingQuestion> unclearMappings,
-        List<RequiredOptionQuestion> requiredOptionFields,
-        List<RequiredInputQuestion> requiredInputFields
+        List<MappingConfirmation> mappingConfirmations,
+        List<OptionConfirmation> optionConfirmations,
+        List<InputConfirmation> inputConfirmations
 ) {
 }

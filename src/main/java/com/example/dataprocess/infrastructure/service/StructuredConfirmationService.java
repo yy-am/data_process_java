@@ -1,21 +1,18 @@
 package com.example.dataprocess.infrastructure.service;
 
-import com.example.dataprocess.domain.model.FieldMappingDecision;
-import com.example.dataprocess.domain.model.InputFieldDecision;
-import com.example.dataprocess.domain.model.OptionFieldDecision;
+import com.example.dataprocess.domain.model.InputConfirmation;
+import com.example.dataprocess.domain.model.MappingConfirmation;
+import com.example.dataprocess.domain.model.OptionConfirmation;
 import com.example.dataprocess.domain.model.OptionItem;
-import com.example.dataprocess.domain.model.RequiredInputQuestion;
-import com.example.dataprocess.domain.model.RequiredOptionQuestion;
 import com.example.dataprocess.domain.model.SourceFieldCandidate;
 import com.example.dataprocess.domain.model.TaskSession;
 import com.example.dataprocess.domain.model.TemplateCatalogItem;
 import com.example.dataprocess.domain.model.TemplateRecognitionResult;
-import com.example.dataprocess.domain.model.UnclearMappingQuestion;
 import com.example.dataprocess.domain.model.UserConfirmationItems;
 import com.example.dataprocess.domain.model.UserConfirmationResult;
-import com.example.dataprocess.interfaces.restful.request.FieldMappingDecisionDto;
-import com.example.dataprocess.interfaces.restful.request.InputFieldDecisionDto;
-import com.example.dataprocess.interfaces.restful.request.OptionFieldDecisionDto;
+import com.example.dataprocess.interfaces.restful.request.InputConfirmationDto;
+import com.example.dataprocess.interfaces.restful.request.MappingConfirmationDto;
+import com.example.dataprocess.interfaces.restful.request.OptionConfirmationDto;
 import com.example.dataprocess.interfaces.restful.request.UserConfirmationRequest;
 import org.springframework.stereotype.Service;
 
@@ -60,34 +57,34 @@ public class StructuredConfirmationService {
                 ? List.of()
                 : recognitionResult.unresolvedTargetFields();
 
-        List<UnclearMappingQuestion> unclearMappings = new ArrayList<>();
-        List<RequiredOptionQuestion> requiredOptionFields = new ArrayList<>();
-        List<RequiredInputQuestion> requiredInputFields = new ArrayList<>();
+        List<MappingConfirmation> mappingConfirmations = new ArrayList<>();
+        List<OptionConfirmation> optionConfirmations = new ArrayList<>();
+        List<InputConfirmation> inputConfirmations = new ArrayList<>();
 
         for (String targetField : catalogItem.targetFields()) {
             if (PERIOD_FIELD_CODE.equals(targetField)) {
-                requiredOptionFields.add(buildPeriodQuestion());
+                optionConfirmations.add(buildPeriodConfirmation());
                 continue;
             }
             if (D_FIELD_CODE.equals(targetField)) {
-                requiredInputFields.add(buildFieldDQuestion());
+                inputConfirmations.add(buildFieldDConfirmation());
                 continue;
             }
             if (unresolvedFields.contains(targetField)) {
-                unclearMappings.add(buildMappingQuestion(targetField, session.sourceHeaders()));
+                mappingConfirmations.add(buildMappingConfirmation(targetField, session.sourceHeaders()));
             }
         }
 
-        if (unclearMappings.isEmpty() && requiredOptionFields.isEmpty() && requiredInputFields.isEmpty()) {
+        if (mappingConfirmations.isEmpty() && optionConfirmations.isEmpty() && inputConfirmations.isEmpty()) {
             throw new IllegalStateException("模板识别要求人工确认，但后端未生成任何确认项。");
         }
 
         return new UserConfirmationItems(
                 session.taskId(),
                 recognitionResult.templateCode(),
-                List.copyOf(unclearMappings),
-                List.copyOf(requiredOptionFields),
-                List.copyOf(requiredInputFields)
+                List.copyOf(mappingConfirmations),
+                List.copyOf(optionConfirmations),
+                List.copyOf(inputConfirmations)
         );
     }
 
@@ -102,45 +99,45 @@ public class StructuredConfirmationService {
             throw new IllegalArgumentException("用户确认请求中的 templateCode 与待确认模板不一致。");
         }
 
-        Map<String, UnclearMappingQuestion> mappingQuestions = pendingItems.unclearMappings().stream()
-                .collect(Collectors.toMap(UnclearMappingQuestion::targetFieldCode, Function.identity(), (left, right) -> left, LinkedHashMap::new));
-        Map<String, RequiredOptionQuestion> optionQuestions = pendingItems.requiredOptionFields().stream()
-                .collect(Collectors.toMap(RequiredOptionQuestion::fieldCode, Function.identity(), (left, right) -> left, LinkedHashMap::new));
-        Map<String, RequiredInputQuestion> inputQuestions = pendingItems.requiredInputFields().stream()
-                .collect(Collectors.toMap(RequiredInputQuestion::fieldCode, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+        Map<String, MappingConfirmation> mappingQuestions = pendingItems.mappingConfirmations().stream()
+                .collect(Collectors.toMap(MappingConfirmation::targetFieldCode, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+        Map<String, OptionConfirmation> optionQuestions = pendingItems.optionConfirmations().stream()
+                .collect(Collectors.toMap(OptionConfirmation::fieldCode, Function.identity(), (left, right) -> left, LinkedHashMap::new));
+        Map<String, InputConfirmation> inputQuestions = pendingItems.inputConfirmations().stream()
+                .collect(Collectors.toMap(InputConfirmation::fieldCode, Function.identity(), (left, right) -> left, LinkedHashMap::new));
 
         validateDecisionCoverage(
                 mappingQuestions.keySet(),
-                request.mappingDecisions().stream().map(FieldMappingDecisionDto::targetFieldCode).toList(),
+                request.mappingConfirmations().stream().map(MappingConfirmationDto::targetFieldCode).toList(),
                 "字段映射确认"
         );
         validateDecisionCoverage(
                 optionQuestions.keySet(),
-                request.optionFieldDecisions().stream().map(OptionFieldDecisionDto::fieldCode).toList(),
+                request.optionConfirmations().stream().map(OptionConfirmationDto::fieldCode).toList(),
                 "枚举字段确认"
         );
         validateDecisionCoverage(
                 inputQuestions.keySet(),
-                request.inputFieldDecisions().stream().map(InputFieldDecisionDto::fieldCode).toList(),
+                request.inputConfirmations().stream().map(InputConfirmationDto::fieldCode).toList(),
                 "手工输入字段确认"
         );
 
-        List<FieldMappingDecision> mappingDecisions = request.mappingDecisions().stream()
-                .map(decision -> validateAndConvertMappingDecision(mappingQuestions.get(decision.targetFieldCode()), decision))
+        List<MappingConfirmation> mappingConfirmations = request.mappingConfirmations().stream()
+                .map(decision -> validateAndConvertMappingConfirmation(mappingQuestions.get(decision.targetFieldCode()), decision))
                 .toList();
-        List<OptionFieldDecision> optionFieldDecisions = request.optionFieldDecisions().stream()
-                .map(decision -> validateAndConvertOptionDecision(optionQuestions.get(decision.fieldCode()), decision))
+        List<OptionConfirmation> optionConfirmations = request.optionConfirmations().stream()
+                .map(decision -> validateAndConvertOptionConfirmation(optionQuestions.get(decision.fieldCode()), decision))
                 .toList();
-        List<InputFieldDecision> inputFieldDecisions = request.inputFieldDecisions().stream()
-                .map(decision -> validateAndConvertInputDecision(inputQuestions.get(decision.fieldCode()), decision))
+        List<InputConfirmation> inputConfirmations = request.inputConfirmations().stream()
+                .map(decision -> validateAndConvertInputConfirmation(inputQuestions.get(decision.fieldCode()), decision))
                 .toList();
 
         return new UserConfirmationResult(
                 request.taskId(),
                 request.templateCode(),
-                mappingDecisions,
-                optionFieldDecisions,
-                inputFieldDecisions
+                mappingConfirmations,
+                optionConfirmations,
+                inputConfirmations
         );
     }
 
@@ -162,7 +159,7 @@ public class StructuredConfirmationService {
     /**
      * 校验字段映射结果只能从候选源字段中选择。
      */
-    private FieldMappingDecision validateAndConvertMappingDecision(UnclearMappingQuestion question, FieldMappingDecisionDto decision) {
+    private MappingConfirmation validateAndConvertMappingConfirmation(MappingConfirmation question, MappingConfirmationDto decision) {
         if (question == null) {
             throw new IllegalArgumentException("收到未知的字段映射确认项: " + decision.targetFieldCode());
         }
@@ -174,8 +171,11 @@ public class StructuredConfirmationService {
                 throw new IllegalArgumentException("字段映射确认包含非法源字段: " + selectedSourceField);
             }
         }
-        return new FieldMappingDecision(
-                decision.targetFieldCode(),
+        return new MappingConfirmation(
+                question.targetFieldCode(),
+                question.targetFieldName(),
+                question.question(),
+                question.candidates(),
                 List.copyOf(decision.selectedSourceFields())
         );
     }
@@ -183,23 +183,29 @@ public class StructuredConfirmationService {
     /**
      * 校验枚举字段结果只能从候选值中选择。
      */
-    private OptionFieldDecision validateAndConvertOptionDecision(RequiredOptionQuestion question, OptionFieldDecisionDto decision) {
+    private OptionConfirmation validateAndConvertOptionConfirmation(OptionConfirmation question, OptionConfirmationDto decision) {
         if (question == null) {
             throw new IllegalArgumentException("收到未知的枚举字段确认项: " + decision.fieldCode());
         }
         Set<String> allowedValues = question.options().stream()
-                .map(OptionItem::value)
+                .map(OptionItem::code)
                 .collect(Collectors.toSet());
         if (!allowedValues.contains(decision.selectedValue())) {
             throw new IllegalArgumentException("枚举字段确认包含非法选项: " + decision.selectedValue());
         }
-        return new OptionFieldDecision(decision.fieldCode(), decision.selectedValue());
+        return new OptionConfirmation(
+                question.fieldCode(),
+                question.fieldName(),
+                question.question(),
+                question.options(),
+                decision.selectedValue()
+        );
     }
 
     /**
      * 校验手工输入字段结果必须有明确值。
      */
-    private InputFieldDecision validateAndConvertInputDecision(RequiredInputQuestion question, InputFieldDecisionDto decision) {
+    private InputConfirmation validateAndConvertInputConfirmation(InputConfirmation question, InputConfirmationDto decision) {
         if (question == null) {
             throw new IllegalArgumentException("收到未知的手工输入确认项: " + decision.fieldCode());
         }
@@ -207,26 +213,33 @@ public class StructuredConfirmationService {
         if (value.isEmpty()) {
             throw new IllegalArgumentException("手工输入字段不能为空: " + decision.fieldCode());
         }
-        return new InputFieldDecision(decision.fieldCode(), value);
+        return new InputConfirmation(
+                question.fieldCode(),
+                question.fieldName(),
+                question.question(),
+                question.hint(),
+                value
+        );
     }
 
     /**
-     * 构造字段映射问题。
+     * 构造字段映射确认项。
      *
      * <p>一期不做复杂语义推理，只把现有表头全部作为候选项显式展示，
      * 再用简单的名称相似度给出排序分数，避免在后端埋黑盒规则。</p>
      */
-    private UnclearMappingQuestion buildMappingQuestion(String targetFieldCode, List<String> sourceHeaders) {
+    private MappingConfirmation buildMappingConfirmation(String targetFieldCode, List<String> sourceHeaders) {
         List<SourceFieldCandidate> candidates = sourceHeaders.stream()
                 .map(header -> new SourceFieldCandidate(header, header, computeCandidateScore(targetFieldCode, header)))
                 .sorted(Comparator.comparing(SourceFieldCandidate::confidence).reversed())
                 .toList();
 
-        return new UnclearMappingQuestion(
+        return new MappingConfirmation(
                 targetFieldCode,
                 "目标字段 " + targetFieldCode,
                 "请选择目标字段 " + targetFieldCode + " 对应的源列。",
-                candidates
+                candidates,
+                List.of()
         );
     }
 
@@ -246,10 +259,10 @@ public class StructuredConfirmationService {
     }
 
     /**
-     * 构造 period 枚举确认问题。
+     * 构造 period 枚举确认项。
      */
-    private RequiredOptionQuestion buildPeriodQuestion() {
-        return new RequiredOptionQuestion(
+    private OptionConfirmation buildPeriodConfirmation() {
+        return new OptionConfirmation(
                 PERIOD_FIELD_CODE,
                 "期间",
                 "请选择 period 字段的值。",
@@ -257,19 +270,21 @@ public class StructuredConfirmationService {
                         new OptionItem("2026-04", "2026-04"),
                         new OptionItem("2026-05", "2026-05"),
                         new OptionItem("2026-06", "2026-06")
-                )
+                ),
+                null
         );
     }
 
     /**
-     * 构造 D 手工输入问题。
+     * 构造 D 手工输入确认项。
      */
-    private RequiredInputQuestion buildFieldDQuestion() {
-        return new RequiredInputQuestion(
+    private InputConfirmation buildFieldDConfirmation() {
+        return new InputConfirmation(
                 D_FIELD_CODE,
                 "字段 D",
                 "请输入字段 D 的值。",
-                "例如：manual-fill"
+                "例如：manual-fill",
+                null
         );
     }
 
