@@ -16,13 +16,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * 模板识别服务。
- *
- * <p>一期保持为单步 AI 服务。它只做一次模板识别调用，
- * 不引入 skill，不做多轮对话，也不对模型结果做隐式补值。</p>
- *
- * <p>当前运行时提示词来自资源目录：
- * {@code src/main/resources/prompts/template-recognition-prompt.md}。</p>
+ * Performs a single template recognition call against the uploaded input snapshot.
  */
 @Service
 public class TemplateRecognitionService {
@@ -45,12 +39,9 @@ public class TemplateRecognitionService {
         this.objectMapper = objectMapper;
         this.templateCatalogService = templateCatalogService;
         this.systemPromptTemplate = promptTemplateService.loadPromptSection(PROMPT_RESOURCE_PATH, "System Prompt");
-        this.userPromptTemplate = promptTemplateService.loadPromptSection(PROMPT_RESOURCE_PATH, "User Prompt 模板");
+        this.userPromptTemplate = promptTemplateService.loadPromptSection(PROMPT_RESOURCE_PATH, "User Prompt Template");
     }
 
-    /**
-     * 执行一次模板识别。
-     */
     public TemplateRecognitionResult recognize(InputSnapshot inputSnapshot) {
         List<PresetUserTemplateDefinition> presetTemplates = templateCatalogService.readPresetTemplateCatalog();
         List<StandardTemplateDefinition> standardTemplates = presetTemplates.stream()
@@ -69,9 +60,6 @@ public class TemplateRecognitionService {
         return normalizeAndValidateResult(result, presetTemplates);
     }
 
-    /**
-     * 构造模板识别用户提示词。
-     */
     private String buildUserPrompt(
             InputSnapshot inputSnapshot,
             List<PresetUserTemplateDefinition> presetTemplates,
@@ -85,24 +73,18 @@ public class TemplateRecognitionService {
         return userPromptTemplate.replace("{payload-json}", writeJson(payload));
     }
 
-    /**
-     * 对模型结果做最小归一化和显式校验。
-     *
-     * <p>这里只统一空集合和空布尔值，并校验预置用户模板与标准模板关系是否来自当前目录。
-     * 不回填字段，不追加任何隐藏业务规则。</p>
-     */
     private TemplateRecognitionResult normalizeAndValidateResult(
             TemplateRecognitionResult result,
             List<PresetUserTemplateDefinition> presetTemplates
     ) {
         if (result == null) {
-            throw new IllegalStateException("模板识别服务未返回结果。");
+            throw new IllegalStateException("Template recognition did not return a result.");
         }
-        if (result.presetTemplateCode() == null || result.presetTemplateCode().isBlank()) {
-            throw new IllegalStateException("模板识别结果缺少 presetTemplateCode。");
+        if (isBlank(result.presetTemplateCode())) {
+            throw new IllegalStateException("Template recognition result is missing presetTemplateCode.");
         }
-        if (result.standardTemplateCode() == null || result.standardTemplateCode().isBlank()) {
-            throw new IllegalStateException("模板识别结果缺少 standardTemplateCode。");
+        if (isBlank(result.standardTemplateCode())) {
+            throw new IllegalStateException("Template recognition result is missing standardTemplateCode.");
         }
 
         Map<String, PresetUserTemplateDefinition> presetTemplateMap = presetTemplates.stream()
@@ -112,16 +94,19 @@ public class TemplateRecognitionService {
                 ));
         PresetUserTemplateDefinition matchedTemplate = presetTemplateMap.get(result.presetTemplateCode());
         if (matchedTemplate == null) {
-            throw new IllegalStateException("模板识别结果返回了目录外的 presetTemplateCode: " + result.presetTemplateCode());
+            throw new IllegalStateException(
+                    "Template recognition returned a presetTemplateCode outside the catalog: "
+                            + result.presetTemplateCode()
+            );
         }
         if (!matchedTemplate.standardTemplateCode().equals(result.standardTemplateCode())) {
-            throw new IllegalStateException("模板识别结果中的 standardTemplateCode 与目录维护关系不一致。");
+            throw new IllegalStateException("standardTemplateCode does not match the catalog mapping.");
         }
-        if (result.sceneCode() == null || !matchedTemplate.sceneCode().equals(result.sceneCode())) {
-            throw new IllegalStateException("模板识别结果中的 sceneCode 与目录维护关系不一致。");
+        if (!matchedTemplate.sceneCode().equals(result.sceneCode())) {
+            throw new IllegalStateException("sceneCode does not match the catalog mapping.");
         }
-        if (result.countryCode() == null || !matchedTemplate.countryCode().equals(result.countryCode())) {
-            throw new IllegalStateException("模板识别结果中的 countryCode 与目录维护关系不一致。");
+        if (!matchedTemplate.countryCode().equals(result.countryCode())) {
+            throw new IllegalStateException("countryCode does not match the catalog mapping.");
         }
 
         return new TemplateRecognitionResult(
@@ -131,19 +116,19 @@ public class TemplateRecognitionService {
                 result.countryCode(),
                 result.confidence(),
                 Boolean.TRUE.equals(result.needUserConfirm()),
-                result.reason(),
-                result.unresolvedTargetFields() == null ? List.of() : List.copyOf(result.unresolvedTargetFields())
+                result.reason()
         );
     }
 
-    /**
-     * 序列化模型上下文。
-     */
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
     private String writeJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
         } catch (JsonProcessingException ex) {
-            throw new IllegalStateException("序列化模板识别上下文失败。", ex);
+            throw new IllegalStateException("Failed to serialize template recognition payload.", ex);
         }
     }
 }

@@ -1,18 +1,15 @@
 package com.example.dataprocess.domain.model;
 
-import java.util.List;
-
 /**
- * 模板识别结果。
+ * Template recognition result.
  *
- * @param presetTemplateCode 识别出的预置用户模板编码
- * @param standardTemplateCode 对应标准模板编码
- * @param sceneCode 识别出的场景编码
- * @param countryCode 识别出的国家或区域编码
- * @param confidence 识别结果置信度
- * @param needUserConfirm 是否仍需用户补充确认
- * @param reason 模型给出的识别理由
- * @param unresolvedTargetFields 尚未确定映射关系的目标字段
+ * @param presetTemplateCode recognized preset template code
+ * @param standardTemplateCode matched standard template code
+ * @param sceneCode recognized scene code
+ * @param countryCode recognized country or region code
+ * @param confidence recognition confidence
+ * @param needUserConfirm whether template recognition itself still needs manual review
+ * @param reason model explanation for the recognition result
  */
 public record TemplateRecognitionResult(
         String presetTemplateCode,
@@ -21,7 +18,6 @@ public record TemplateRecognitionResult(
         String countryCode,
         Double confidence,
         Boolean needUserConfirm,
-        String reason,
-        List<String> unresolvedTargetFields
+        String reason
 ) {
 }

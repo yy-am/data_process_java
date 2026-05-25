@@ -33,7 +33,7 @@ public class RuleDraftingService {
     private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
     private final TemplateCatalogService templateCatalogService;
-    private final ProcessingRuleService processingRuleService;
+    private final ProcessingRuleLoader processingRuleLoader;
     private final String systemPromptTemplate;
     private final String userPromptTemplate;
 
@@ -41,13 +41,13 @@ public class RuleDraftingService {
             ChatModel chatModel,
             ObjectMapper objectMapper,
             TemplateCatalogService templateCatalogService,
-            ProcessingRuleService processingRuleService,
+            ProcessingRuleLoader processingRuleLoader,
             PromptTemplateService promptTemplateService
     ) {
         this.chatModel = chatModel;
         this.objectMapper = objectMapper;
         this.templateCatalogService = templateCatalogService;
-        this.processingRuleService = processingRuleService;
+        this.processingRuleLoader = processingRuleLoader;
         this.systemPromptTemplate = promptTemplateService.loadPromptSection(PROMPT_RESOURCE_PATH, "System Prompt");
         this.userPromptTemplate = promptTemplateService.loadPromptSection(PROMPT_RESOURCE_PATH, "User Prompt 模板");
     }
@@ -69,7 +69,7 @@ public class RuleDraftingService {
         StandardTemplateDefinition standardTemplate = templateCatalogService.getRequiredStandardTemplate(
                 templateRecognitionResult.standardTemplateCode()
         );
-        ProcessingRuleDocument processingRuleDocument = processingRuleService.loadRuleDocument(
+        ProcessingRuleDocument processingRuleDocument = processingRuleLoader.load(
                 templateRecognitionResult.presetTemplateCode()
         );
 
