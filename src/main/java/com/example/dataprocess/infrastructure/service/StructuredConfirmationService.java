@@ -4,9 +4,10 @@ import com.example.dataprocess.domain.model.InputConfirmation;
 import com.example.dataprocess.domain.model.MappingConfirmation;
 import com.example.dataprocess.domain.model.OptionConfirmation;
 import com.example.dataprocess.domain.model.OptionItem;
+import com.example.dataprocess.domain.model.ProcessingRuleDocument;
+import com.example.dataprocess.domain.model.ProcessingRuleItem;
 import com.example.dataprocess.domain.model.SourceFieldCandidate;
 import com.example.dataprocess.domain.model.TaskSession;
-import com.example.dataprocess.domain.model.TemplateCatalogItem;
 import com.example.dataprocess.domain.model.TemplateRecognitionResult;
 import com.example.dataprocess.domain.model.UserConfirmationItems;
 import com.example.dataprocess.domain.model.UserConfirmationResult;
@@ -34,13 +35,12 @@ import java.util.stream.Collectors;
 @Service
 public class StructuredConfirmationService {
 
-    private static final String PERIOD_FIELD_CODE = "period";
-    private static final String D_FIELD_CODE = "D";
+    private static final String USER_CONFIRM_RULE_TYPE = "USER_CONFIRM";
 
-    private final TemplateCatalogService templateCatalogService;
+    private final ProcessingRuleService processingRuleService;
 
-    public StructuredConfirmationService(TemplateCatalogService templateCatalogService) {
-        this.templateCatalogService = templateCatalogService;
+    public StructuredConfirmationService(ProcessingRuleService processingRuleService) {
+        this.processingRuleService = processingRuleService;
     }
 
     /**
@@ -48,9 +48,8 @@ public class StructuredConfirmationService {
      */
     public UserConfirmationItems buildUserConfirmationItems(TaskSession session) {
         TemplateRecognitionResult recognitionResult = requireTemplateRecognitionResult(session);
-        TemplateCatalogItem catalogItem = templateCatalogService.getRequiredTemplate(
-                session.inputType(),
-                recognitionResult.templateCode()
+        ProcessingRuleDocument ruleDocument = processingRuleService.loadRuleDocument(
+                recognitionResult.presetTemplateCode()
         );
 
         List<String> unresolvedFields = recognitionResult.unresolvedTargetFields() == null
@@ -61,27 +60,25 @@ public class StructuredConfirmationService {
         List<OptionConfirmation> optionConfirmations = new ArrayList<>();
         List<InputConfirmation> inputConfirmations = new ArrayList<>();
 
-        for (String targetField : catalogItem.targetFields()) {
-            if (PERIOD_FIELD_CODE.equals(targetField)) {
-                optionConfirmations.add(buildPeriodConfirmation());
-                continue;
-            }
-            if (D_FIELD_CODE.equals(targetField)) {
-                inputConfirmations.add(buildFieldDConfirmation());
-                continue;
-            }
-            if (unresolvedFields.contains(targetField)) {
-                mappingConfirmations.add(buildMappingConfirmation(targetField, session.sourceHeaders()));
-            }
+        for (String unresolvedField : unresolvedFields) {
+            mappingConfirmations.add(buildMappingConfirmation(unresolvedField, session.sourceHeaders()));
         }
 
-        if (mappingConfirmations.isEmpty() && optionConfirmations.isEmpty() && inputConfirmations.isEmpty()) {
-            throw new IllegalStateException("模板识别要求人工确认，但后端未生成任何确认项。");
+        for (ProcessingRuleItem ruleItem : ruleDocument.ruleItems()) {
+            if (!USER_CONFIRM_RULE_TYPE.equals(ruleItem.ruleType())) {
+                continue;
+            }
+            if (!ruleItem.options().isEmpty()) {
+                optionConfirmations.add(buildOptionConfirmation(ruleItem));
+            } else {
+                inputConfirmations.add(buildInputConfirmation(ruleItem));
+            }
         }
 
         return new UserConfirmationItems(
                 session.taskId(),
-                recognitionResult.templateCode(),
+                recognitionResult.presetTemplateCode(),
+                recognitionResult.standardTemplateCode(),
                 List.copyOf(mappingConfirmations),
                 List.copyOf(optionConfirmations),
                 List.copyOf(inputConfirmations)
@@ -95,8 +92,11 @@ public class StructuredConfirmationService {
         if (!pendingItems.taskId().equals(request.taskId())) {
             throw new IllegalArgumentException("用户确认请求中的 taskId 与待确认任务不一致。");
         }
-        if (!pendingItems.templateCode().equals(request.templateCode())) {
-            throw new IllegalArgumentException("用户确认请求中的 templateCode 与待确认模板不一致。");
+        if (!pendingItems.presetTemplateCode().equals(request.presetTemplateCode())) {
+            throw new IllegalArgumentException("用户确认请求中的 presetTemplateCode 与待确认模板不一致。");
+        }
+        if (!pendingItems.standardTemplateCode().equals(request.standardTemplateCode())) {
+            throw new IllegalArgumentException("用户确认请求中的 standardTemplateCode 与待确认标准模板不一致。");
         }
 
         Map<String, MappingConfirmation> mappingQuestions = pendingItems.mappingConfirmations().stream()
@@ -134,7 +134,8 @@ public class StructuredConfirmationService {
 
         return new UserConfirmationResult(
                 request.taskId(),
-                request.templateCode(),
+                request.presetTemplateCode(),
+                request.standardTemplateCode(),
                 mappingConfirmations,
                 optionConfirmations,
                 inputConfirmations
@@ -259,33 +260,41 @@ public class StructuredConfirmationService {
     }
 
     /**
-     * 构造 period 枚举确认项。
+     * 根据规则构造枚举确认项。
      */
-    private OptionConfirmation buildPeriodConfirmation() {
+    private OptionConfirmation buildOptionConfirmation(ProcessingRuleItem ruleItem) {
         return new OptionConfirmation(
-                PERIOD_FIELD_CODE,
-                "期间",
-                "请选择 period 字段的值。",
-                List.of(
-                        new OptionItem("2026-04", "2026-04"),
-                        new OptionItem("2026-05", "2026-05"),
-                        new OptionItem("2026-06", "2026-06")
-                ),
+                resolveConfirmationFieldCode(ruleItem),
+                "目标列 " + ruleItem.targetColumn(),
+                "请确认目标列 " + ruleItem.targetColumn() + " 的取值。",
+                ruleItem.options().stream()
+                        .map(option -> new OptionItem(option, option))
+                        .toList(),
                 null
         );
     }
 
     /**
-     * 构造 D 手工输入确认项。
+     * 根据规则构造输入确认项。
      */
-    private InputConfirmation buildFieldDConfirmation() {
+    private InputConfirmation buildInputConfirmation(ProcessingRuleItem ruleItem) {
         return new InputConfirmation(
-                D_FIELD_CODE,
-                "字段 D",
-                "请输入字段 D 的值。",
-                "例如：manual-fill",
+                resolveConfirmationFieldCode(ruleItem),
+                "目标列 " + ruleItem.targetColumn(),
+                "请填写目标列 " + ruleItem.targetColumn() + " 的值。",
+                ruleItem.inputHint().isBlank() ? "请输入明确值" : ruleItem.inputHint(),
                 null
         );
+    }
+
+    /**
+     * 统一解析确认字段编码，优先使用规则中显式声明的字段名。
+     */
+    private String resolveConfirmationFieldCode(ProcessingRuleItem ruleItem) {
+        if (ruleItem.userInputField() != null && !ruleItem.userInputField().isBlank()) {
+            return ruleItem.userInputField();
+        }
+        return ruleItem.targetColumn();
     }
 
     /**

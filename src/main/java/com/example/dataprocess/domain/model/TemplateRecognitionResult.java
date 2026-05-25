@@ -5,7 +5,8 @@ import java.util.List;
 /**
  * 模板识别结果。
  *
- * @param templateCode 识别出的模板编码
+ * @param presetTemplateCode 识别出的预置用户模板编码
+ * @param standardTemplateCode 对应标准模板编码
  * @param sceneCode 识别出的场景编码
  * @param countryCode 识别出的国家或区域编码
  * @param confidence 识别结果置信度
@@ -14,7 +15,8 @@ import java.util.List;
  * @param unresolvedTargetFields 尚未确定映射关系的目标字段
  */
 public record TemplateRecognitionResult(
-        String templateCode,
+        String presetTemplateCode,
+        String standardTemplateCode,
         String sceneCode,
         String countryCode,
         Double confidence,

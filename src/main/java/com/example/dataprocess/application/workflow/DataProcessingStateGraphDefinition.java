@@ -67,8 +67,8 @@ public class DataProcessingStateGraphDefinition {
 
     private static final String BUILD_INPUT_SNAPSHOT_NODE = "build_input_snapshot";
     private static final String TEMPLATE_RECOGNITION_NODE = "template_recognition";
-    private static final String NEED_USER_CONFIRMATION_ROUTER = "need_user_confirmation_router";
     private static final String BUILD_USER_CONFIRMATION_REQUEST_NODE = "build_user_confirmation_request";
+    private static final String NEED_USER_CONFIRMATION_ROUTER = "need_user_confirmation_router";
     private static final String WAIT_USER_CONFIRMATION_NODE = "wait_user_confirmation";
     private static final String APPLY_USER_CONFIRMATION_NODE = "apply_user_confirmation";
     private static final String RULE_DRAFTING_NODE = "rule_drafting";
@@ -145,21 +145,10 @@ public class DataProcessingStateGraphDefinition {
                     TemplateRecognitionResult result = templateRecognitionNode.execute(current);
                     return Map.of(
                             TEMPLATE_RECOGNITION_RESULT, result,
-                            WORKFLOW_STAGE, Boolean.TRUE.equals(result.needUserConfirm())
-                                    ? WorkflowStage.USER_CONFIRMATION_REQUIRED.name()
-                                    : WorkflowStage.TEMPLATE_RECOGNIZED.name(),
+                            WORKFLOW_STAGE, WorkflowStage.TEMPLATE_RECOGNIZED.name(),
                             CURRENT_NODE, TEMPLATE_RECOGNITION_NODE,
-                            NEXT_NODE, NEED_USER_CONFIRMATION_ROUTER,
+                            NEXT_NODE, BUILD_USER_CONFIRMATION_REQUEST_NODE,
                             TRACE_LOGS, List.of("Finished template recognition.")
-                    );
-                }))
-                .addNode(NEED_USER_CONFIRMATION_ROUTER, node_async(state -> {
-                    DataProcessingGraphState current = fromNativeState(state.data());
-                    String nextNode = resolveNextNodeAfterRecognition(current);
-                    return Map.of(
-                            CURRENT_NODE, NEED_USER_CONFIRMATION_ROUTER,
-                            NEXT_NODE, nextNode,
-                            TRACE_LOGS, List.of("Resolved user confirmation routing.")
                     );
                 }))
                 .addNode(BUILD_USER_CONFIRMATION_REQUEST_NODE, node_async(state -> {
@@ -167,10 +156,21 @@ public class DataProcessingStateGraphDefinition {
                     UserConfirmationItems items = buildUserConfirmationRequestNode.execute(current);
                     return Map.of(
                             USER_CONFIRMATION_ITEMS, items,
-                            WORKFLOW_STAGE, WorkflowStage.USER_CONFIRMATION_REQUIRED.name(),
+                            WORKFLOW_STAGE, hasUserConfirmationItems(items)
+                                    ? WorkflowStage.USER_CONFIRMATION_REQUIRED.name()
+                                    : WorkflowStage.TEMPLATE_RECOGNIZED.name(),
                             CURRENT_NODE, BUILD_USER_CONFIRMATION_REQUEST_NODE,
-                            NEXT_NODE, WAIT_USER_CONFIRMATION_NODE,
+                            NEXT_NODE, NEED_USER_CONFIRMATION_ROUTER,
                             TRACE_LOGS, List.of("Built structured user confirmation request.")
+                    );
+                }))
+                .addNode(NEED_USER_CONFIRMATION_ROUTER, node_async(state -> {
+                    DataProcessingGraphState current = fromNativeState(state.data());
+                    String nextNode = resolveNextNodeAfterConfirmationItems(current);
+                    return Map.of(
+                            CURRENT_NODE, NEED_USER_CONFIRMATION_ROUTER,
+                            NEXT_NODE, nextNode,
+                            TRACE_LOGS, List.of("Resolved user confirmation routing.")
                     );
                 }))
                 .addNode(WAIT_USER_CONFIRMATION_NODE, node_async(state -> Map.of(
@@ -209,16 +209,16 @@ public class DataProcessingStateGraphDefinition {
 
         workflow.addEdge(START, BUILD_INPUT_SNAPSHOT_NODE);
         workflow.addEdge(BUILD_INPUT_SNAPSHOT_NODE, TEMPLATE_RECOGNITION_NODE);
-        workflow.addEdge(TEMPLATE_RECOGNITION_NODE, NEED_USER_CONFIRMATION_ROUTER);
+        workflow.addEdge(TEMPLATE_RECOGNITION_NODE, BUILD_USER_CONFIRMATION_REQUEST_NODE);
+        workflow.addEdge(BUILD_USER_CONFIRMATION_REQUEST_NODE, NEED_USER_CONFIRMATION_ROUTER);
         workflow.addConditionalEdges(
                 NEED_USER_CONFIRMATION_ROUTER,
                 edge_async(state -> (String) state.value(NEXT_NODE).orElse(RULE_DRAFTING_NODE)),
                 Map.of(
-                        BUILD_USER_CONFIRMATION_REQUEST_NODE, BUILD_USER_CONFIRMATION_REQUEST_NODE,
+                        WAIT_USER_CONFIRMATION_NODE, WAIT_USER_CONFIRMATION_NODE,
                         RULE_DRAFTING_NODE, RULE_DRAFTING_NODE
                 )
         );
-        workflow.addEdge(BUILD_USER_CONFIRMATION_REQUEST_NODE, WAIT_USER_CONFIRMATION_NODE);
         workflow.addEdge(WAIT_USER_CONFIRMATION_NODE, APPLY_USER_CONFIRMATION_NODE);
         workflow.addEdge(APPLY_USER_CONFIRMATION_NODE, RULE_DRAFTING_NODE);
         workflow.addEdge(RULE_DRAFTING_NODE, COMPLETE_NODE);
@@ -286,14 +286,23 @@ public class DataProcessingStateGraphDefinition {
     }
 
     /**
-     * 根据模板识别结果判断是否进入结构化用户确认分支。
+     * 根据已生成的确认项判断是否进入结构化用户确认分支。
      */
-    private String resolveNextNodeAfterRecognition(DataProcessingGraphState state) {
-        if (state.templateRecognitionResult() != null
-                && Boolean.TRUE.equals(state.templateRecognitionResult().needUserConfirm())) {
-            return BUILD_USER_CONFIRMATION_REQUEST_NODE;
+    private String resolveNextNodeAfterConfirmationItems(DataProcessingGraphState state) {
+        if (hasUserConfirmationItems(state.userConfirmationItems())) {
+            return WAIT_USER_CONFIRMATION_NODE;
         }
         return RULE_DRAFTING_NODE;
+    }
+
+    /**
+     * 判断当前确认项集合中是否至少包含一项待确认内容。
+     */
+    private boolean hasUserConfirmationItems(UserConfirmationItems items) {
+        return items != null
+                && (!items.mappingConfirmations().isEmpty()
+                || !items.optionConfirmations().isEmpty()
+                || !items.inputConfirmations().isEmpty());
     }
 
     /**

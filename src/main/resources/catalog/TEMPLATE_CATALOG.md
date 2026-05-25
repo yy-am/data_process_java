@@ -12,17 +12,17 @@
 - countryCode: US
 - standardColumns: invoice_no, tax_a, country, amount
 
-## 用户模板
+## 预置用户模板
 
-### uploadTemplateCode: client-template-a
-- uploadTemplateName: 客户模板A
+### presetTemplateCode: client-template-a
+- presetTemplateName: 客户模板A
 - sceneCode: tax
 - countryCode: CN
 - standardTemplateCode: tax-standard-cn
 - sourceColumns: invoice_no, tax_b, amount
 
-### uploadTemplateCode: client-template-b
-- uploadTemplateName: 客户模板B
+### presetTemplateCode: client-template-b
+- presetTemplateName: 客户模板B
 - sceneCode: tax
 - countryCode: CN
 - standardTemplateCode: tax-standard-cn
