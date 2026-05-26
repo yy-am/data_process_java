@@ -10,6 +10,9 @@ import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -17,70 +20,86 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Excel 解析服务。
- *
- * <p>一期只抽取模板识别和 DSL 生成所需的列名与少量样本行，
- * 不把全量 Excel 数据长期驻留在内存中。</p>
- */
 @Service
 public class ExcelParsingService {
 
     private static final int DEFAULT_SAMPLE_ROW_LIMIT = 5;
 
-    /**
-     * 解析 Excel 文件并提取列名与少量样本数据。
-     */
     public ParsedExcelContent parse(MultipartFile excelFile, String sheetName, Integer sheetIndex, Integer sampleRowLimit) {
         if (excelFile == null || excelFile.isEmpty()) {
-            throw new IllegalArgumentException("Excel 文件不能为空。");
+            throw new IllegalArgumentException("Excel file must not be empty.");
         }
 
+        try (InputStream inputStream = excelFile.getInputStream()) {
+            return parse(inputStream, sheetName, sheetIndex, sampleRowLimit);
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to read uploaded Excel file.", ex);
+        }
+    }
+
+    public ParsedExcelContent parse(File excelFile, String sheetName, Integer sheetIndex, Integer sampleRowLimit) {
+        if (excelFile == null || !excelFile.exists() || !excelFile.isFile()) {
+            throw new IllegalArgumentException("Excel file does not exist or is invalid.");
+        }
+
+        try (InputStream inputStream = new FileInputStream(excelFile)) {
+            return parse(inputStream, sheetName, sheetIndex, sampleRowLimit);
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to read local Excel file.", ex);
+        }
+    }
+
+    public ParsedExcelContent parse(byte[] excelBytes, String sheetName, Integer sheetIndex, Integer sampleRowLimit) {
+        if (excelBytes == null || excelBytes.length == 0) {
+            throw new IllegalArgumentException("Excel bytes must not be empty.");
+        }
+
+        try (InputStream inputStream = new ByteArrayInputStream(excelBytes)) {
+            return parse(inputStream, sheetName, sheetIndex, sampleRowLimit);
+        } catch (IOException ex) {
+            throw new IllegalStateException("Failed to read Excel bytes.", ex);
+        }
+    }
+
+    private ParsedExcelContent parse(InputStream inputStream, String sheetName, Integer sheetIndex, Integer sampleRowLimit) {
         int resolvedSampleRowLimit = sampleRowLimit == null || sampleRowLimit < 1
                 ? DEFAULT_SAMPLE_ROW_LIMIT
                 : sampleRowLimit;
 
-        try (InputStream inputStream = excelFile.getInputStream();
-             Workbook workbook = WorkbookFactory.create(inputStream)) {
+        try (Workbook workbook = WorkbookFactory.create(inputStream)) {
             Sheet sheet = resolveSheet(workbook, sheetName, sheetIndex);
             return extractSheetContent(sheet, resolvedSampleRowLimit);
         } catch (IOException ex) {
-            throw new IllegalStateException("读取上传的 Excel 文件失败。", ex);
+            throw new IllegalStateException("Failed to parse Excel file.", ex);
         }
     }
 
-    /**
-     * 根据工作表名称或下标解析目标工作表。
-     */
     private Sheet resolveSheet(Workbook workbook, String sheetName, Integer sheetIndex) {
         if (sheetName != null && !sheetName.isBlank()) {
             Sheet byName = workbook.getSheet(sheetName);
             if (byName == null) {
-                throw new IllegalArgumentException("未找到指定工作表: " + sheetName);
+                throw new IllegalArgumentException("Specified sheet not found: " + sheetName);
             }
             return byName;
         }
 
         int resolvedSheetIndex = sheetIndex == null ? 0 : sheetIndex;
         if (resolvedSheetIndex < 0 || resolvedSheetIndex >= workbook.getNumberOfSheets()) {
-            throw new IllegalArgumentException("工作表下标越界: " + resolvedSheetIndex);
+            throw new IllegalArgumentException("Sheet index out of range: " + resolvedSheetIndex);
         }
         return workbook.getSheetAt(resolvedSheetIndex);
     }
 
-    /**
-     * 从工作表中抽取表头和样本行。
-     */
     private ParsedExcelContent extractSheetContent(Sheet sheet, int sampleRowLimit) {
         DataFormatter formatter = new DataFormatter();
         Row headerRow = sheet.getRow(sheet.getFirstRowNum());
         if (headerRow == null) {
-            throw new IllegalArgumentException("Excel 工作表缺少表头行。");
+            throw new IllegalArgumentException("Excel sheet is missing a header row.");
         }
 
         List<String> headers = extractHeaders(headerRow, formatter);
         if (headers.isEmpty()) {
-            throw new IllegalArgumentException("Excel 表头为空。");
+            throw new IllegalArgumentException("Excel header row is empty.");
         }
 
         List<Map<String, String>> sampleRows = new ArrayList<>();
@@ -101,9 +120,6 @@ public class ExcelParsingService {
         );
     }
 
-    /**
-     * 读取表头行，并为匿名空表头补上稳定列名。
-     */
     private List<String> extractHeaders(Row headerRow, DataFormatter formatter) {
         List<String> headers = new ArrayList<>();
         short lastCellNum = headerRow.getLastCellNum();
@@ -122,9 +138,6 @@ public class ExcelParsingService {
         return headers;
     }
 
-    /**
-     * 判断一行是否为空白行。
-     */
     private boolean isBlankRow(Row row, int headerSize, DataFormatter formatter) {
         for (int columnIndex = 0; columnIndex < headerSize; columnIndex++) {
             Cell cell = row.getCell(columnIndex);
@@ -135,9 +148,6 @@ public class ExcelParsingService {
         return true;
     }
 
-    /**
-     * 按表头顺序提取单行数据。
-     */
     private Map<String, String> extractRow(Row row, List<String> headers, DataFormatter formatter) {
         Map<String, String> values = new LinkedHashMap<>();
         for (int columnIndex = 0; columnIndex < headers.size(); columnIndex++) {
