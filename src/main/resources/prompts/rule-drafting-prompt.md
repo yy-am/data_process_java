@@ -34,7 +34,7 @@
 ```json
 {
   "presetTemplateCode": "client-template-a",
-  "dslContent": "{\"presetTemplateCode\":\"client-template-a\",\"standardTemplateCode\":\"tax-standard-cn\",\"mappings\":[{\"targetColumn\":\"invoice_no\",\"generateType\":\"DIRECT_MAPPING\",\"sourceColumns\":[\"invoice_no\"]},{\"targetColumn\":\"tax_a\",\"generateType\":\"AI_DERIVED\",\"sourceColumns\":[\"tax_b\"],\"ruleGuide\":\"当 tax_b 表示含税时，tax_a 填 1；否则填 0。\",\"expression\":\"CASE WHEN tax_b = 'Y' THEN '1' ELSE '0' END\"},{\"targetColumn\":\"country\",\"generateType\":\"USER_CONFIRM\",\"value\":\"CN\"},{\"targetColumn\":\"amount\",\"generateType\":\"DIRECT_MAPPING\",\"sourceColumns\":[\"amount\"]}]}",
+  "dslContent": "{\"presetTemplateCode\":\"client-template-a\",\"standardTemplateCode\":\"tax-standard-cn\",\"mappings\":[{\"targetColumn\":\"invoice_no\",\"generateType\":\"DIRECT_MAPPING\",\"sourceColumns\":[\"invoice_no\"]},{\"targetColumn\":\"tax_a\",\"generateType\":\"CASE_WHEN\",\"sourceColumns\":[\"tax_b\"],\"ruleGuide\":\"当 tax_b 表示含税时，tax_a 填 1；否则填 0。\",\"expression\":\"CASE WHEN tax_b = 'Y' THEN '1' ELSE '0' END\"},{\"targetColumn\":\"country\",\"generateType\":\"USER_CONFIRM\",\"value\":\"CN\"},{\"targetColumn\":\"amount\",\"generateType\":\"DIRECT_MAPPING\",\"sourceColumns\":[\"amount\"]}]}",
   "reason": "根据模板识别结果、用户确认结果和对应加工规则生成 DSL"
 }
 ```

@@ -1,7 +1,7 @@
 package com.example.dataprocess.domain.model;
 
 /**
- * Recognition status for a single rule source binding.
+ * 单个规则源字段的绑定识别状态。
  */
 public enum VagueBindingRecoStatus {
     CONFIRMED,

@@ -18,10 +18,13 @@ import com.example.dataprocess.application.workflow.node.RuleDraftingNode;
 import com.example.dataprocess.application.workflow.node.TemplateRecognitionNode;
 import com.example.dataprocess.domain.model.FinalDsl;
 import com.example.dataprocess.domain.model.InputSnapshot;
+import com.example.dataprocess.domain.model.ProcessingRule;
 import com.example.dataprocess.domain.model.TaskSession;
 import com.example.dataprocess.domain.model.TemplateRecognitionResult;
 import com.example.dataprocess.domain.model.UserConfirmationItems;
+import com.example.dataprocess.domain.model.UserConfirmationPreparationResult;
 import com.example.dataprocess.domain.model.UserConfirmationResult;
+import com.example.dataprocess.domain.model.VagueBindingRecoResult;
 import com.example.dataprocess.domain.model.WorkflowStage;
 import com.example.dataprocess.interfaces.restful.request.UserConfirmationRequest;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -54,6 +57,8 @@ public class DataProcessingStateGraphDefinition {
     private static final String SAMPLE_ROWS = "sample_rows";
     private static final String INPUT_SNAPSHOT = "input_snapshot";
     private static final String TEMPLATE_RECOGNITION_RESULT = "template_recognition_result";
+    private static final String PROCESSING_RULE = "processing_rule";
+    private static final String VAGUE_BINDING_RECO_RESULT = "vague_binding_reco_result";
     private static final String USER_CONFIRMATION_ITEMS = "user_confirmation_items";
     private static final String USER_CONFIRMATION_REQUEST = "user_confirmation_request";
     private static final String USER_CONFIRMATION_RESULT = "user_confirmation_result";
@@ -111,6 +116,8 @@ public class DataProcessingStateGraphDefinition {
             strategies.put(SAMPLE_ROWS, new ReplaceStrategy());
             strategies.put(INPUT_SNAPSHOT, new ReplaceStrategy());
             strategies.put(TEMPLATE_RECOGNITION_RESULT, new ReplaceStrategy());
+            strategies.put(PROCESSING_RULE, new ReplaceStrategy());
+            strategies.put(VAGUE_BINDING_RECO_RESULT, new ReplaceStrategy());
             strategies.put(USER_CONFIRMATION_ITEMS, new ReplaceStrategy());
             strategies.put(USER_CONFIRMATION_REQUEST, new ReplaceStrategy());
             strategies.put(USER_CONFIRMATION_RESULT, new ReplaceStrategy());
@@ -153,9 +160,12 @@ public class DataProcessingStateGraphDefinition {
                 }))
                 .addNode(BUILD_USER_CONFIRMATION_REQUEST_NODE, node_async(state -> {
                     DataProcessingGraphState current = fromNativeState(state.data());
-                    UserConfirmationItems items = buildUserConfirmationRequestNode.execute(current);
+                    UserConfirmationPreparationResult result = buildUserConfirmationRequestNode.execute(current);
+                    UserConfirmationItems items = result.userConfirmationItems();
                     return Map.of(
+                            PROCESSING_RULE, result.processingRule(),
                             USER_CONFIRMATION_ITEMS, items,
+                            VAGUE_BINDING_RECO_RESULT, result.vagueBindingRecoResult(),
                             WORKFLOW_STAGE, hasUserConfirmationItems(items)
                                     ? WorkflowStage.USER_CONFIRMATION_REQUIRED.name()
                                     : WorkflowStage.TEMPLATE_RECOGNIZED.name(),
@@ -271,6 +281,8 @@ public class DataProcessingStateGraphDefinition {
                 }),
                 convertNullable(state.get(INPUT_SNAPSHOT), InputSnapshot.class),
                 convertNullable(state.get(TEMPLATE_RECOGNITION_RESULT), TemplateRecognitionResult.class),
+                convertNullable(state.get(PROCESSING_RULE), ProcessingRule.class),
+                convertNullable(state.get(VAGUE_BINDING_RECO_RESULT), VagueBindingRecoResult.class),
                 convertNullable(state.get(USER_CONFIRMATION_ITEMS), UserConfirmationItems.class),
                 convertNullable(state.get(USER_CONFIRMATION_REQUEST), UserConfirmationRequest.class),
                 convertNullable(state.get(USER_CONFIRMATION_RESULT), UserConfirmationResult.class),

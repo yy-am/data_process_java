@@ -11,6 +11,8 @@ import java.util.Map;
  * @param sourceHeaders 原始或解析后的源表头
  * @param sampleRows 样例数据行
  * @param templateRecognitionResult 模板识别结果
+ * @param processingRule 本次任务确定的完整加工规则
+ * @param vagueBindingRecoResult 完整字段绑定识别结果
  * @param userConfirmationItems 需要前端展示的确认项
  * @param userConfirmationResult 用户提交并通过校验的确认结果
  * @param finalDsl 最终生成的 DSL
@@ -21,6 +23,8 @@ public record TaskSession(
         List<String> sourceHeaders,
         List<Map<String, String>> sampleRows,
         TemplateRecognitionResult templateRecognitionResult,
+        ProcessingRule processingRule,
+        VagueBindingRecoResult vagueBindingRecoResult,
         UserConfirmationItems userConfirmationItems,
         UserConfirmationResult userConfirmationResult,
         FinalDsl finalDsl
@@ -43,6 +47,8 @@ public record TaskSession(
                 null,
                 null,
                 null,
+                null,
+                null,
                 null
         );
     }
@@ -56,6 +62,44 @@ public record TaskSession(
                 inputType,
                 sourceHeaders,
                 sampleRows,
+                result,
+                processingRule,
+                vagueBindingRecoResult,
+                userConfirmationItems,
+                userConfirmationResult,
+                finalDsl
+        );
+    }
+
+    /**
+     * 回写本次任务确定的加工规则。
+     */
+    public TaskSession withProcessingRule(ProcessingRule rule) {
+        return new TaskSession(
+                taskId,
+                inputType,
+                sourceHeaders,
+                sampleRows,
+                templateRecognitionResult,
+                rule,
+                vagueBindingRecoResult,
+                userConfirmationItems,
+                userConfirmationResult,
+                finalDsl
+        );
+    }
+
+    /**
+     * 回写完整字段绑定识别结果。
+     */
+    public TaskSession withVagueBindingRecoResult(VagueBindingRecoResult result) {
+        return new TaskSession(
+                taskId,
+                inputType,
+                sourceHeaders,
+                sampleRows,
+                templateRecognitionResult,
+                processingRule,
                 result,
                 userConfirmationItems,
                 userConfirmationResult,
@@ -73,6 +117,8 @@ public record TaskSession(
                 sourceHeaders,
                 sampleRows,
                 templateRecognitionResult,
+                processingRule,
+                vagueBindingRecoResult,
                 items,
                 userConfirmationResult,
                 finalDsl
@@ -89,6 +135,8 @@ public record TaskSession(
                 sourceHeaders,
                 sampleRows,
                 templateRecognitionResult,
+                processingRule,
+                vagueBindingRecoResult,
                 userConfirmationItems,
                 result,
                 finalDsl
@@ -105,6 +153,8 @@ public record TaskSession(
                 sourceHeaders,
                 sampleRows,
                 templateRecognitionResult,
+                processingRule,
+                vagueBindingRecoResult,
                 userConfirmationItems,
                 userConfirmationResult,
                 newFinalDsl

@@ -3,7 +3,7 @@ package com.example.dataprocess.infrastructure.service;
 import com.example.dataprocess.domain.model.FinalDsl;
 import com.example.dataprocess.domain.model.InputSnapshot;
 import com.example.dataprocess.domain.model.PresetUserTemplateDefinition;
-import com.example.dataprocess.domain.model.ProcessingRuleDocument;
+import com.example.dataprocess.domain.model.ProcessingRule;
 import com.example.dataprocess.domain.model.StandardTemplateDefinition;
 import com.example.dataprocess.domain.model.TemplateRecognitionResult;
 import com.example.dataprocess.domain.model.UserConfirmationResult;
@@ -69,7 +69,7 @@ public class RuleDraftingService {
         StandardTemplateDefinition standardTemplate = templateCatalogService.getRequiredStandardTemplate(
                 templateRecognitionResult.standardTemplateCode()
         );
-        ProcessingRuleDocument processingRuleDocument = processingRuleLoader.load(
+        ProcessingRule processingRule = processingRuleLoader.load(
                 templateRecognitionResult.presetTemplateCode()
         );
 
@@ -82,7 +82,7 @@ public class RuleDraftingService {
                         userConfirmationResult,
                         presetTemplate,
                         standardTemplate,
-                        processingRuleDocument
+                        processingRule
                 ))
                 .call()
                 .entity(FinalDsl.class);
@@ -100,7 +100,7 @@ public class RuleDraftingService {
             UserConfirmationResult userConfirmationResult,
             PresetUserTemplateDefinition presetTemplate,
             StandardTemplateDefinition standardTemplate,
-            ProcessingRuleDocument processingRuleDocument
+            ProcessingRule processingRule
     ) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("inputSnapshot", inputSnapshot);
@@ -108,7 +108,7 @@ public class RuleDraftingService {
         payload.put("userConfirmationResult", userConfirmationResult);
         payload.put("presetTemplate", presetTemplate);
         payload.put("standardTemplate", standardTemplate);
-        payload.put("processingRuleDocument", processingRuleDocument);
+        payload.put("processingRule", processingRule);
 
         return userPromptTemplate.replace("{payload-json}", writeJson(payload));
     }

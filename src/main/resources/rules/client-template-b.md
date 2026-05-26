@@ -12,7 +12,7 @@
 - 说明: 标准列 invoice_no 直接使用上传文件中的 invoice_id 列。
 
 ### targetColumn: tax_a
-- ruleType: AI_DERIVED
+- ruleType: CASE_WHEN
 - sourceColumns: tax_code
 - 说明: 标准列 tax_a 需要结合 tax_code 的值生成。
 - ruleGuide: 当 tax_code 表示含税时，tax_a 填 1；否则填 0。

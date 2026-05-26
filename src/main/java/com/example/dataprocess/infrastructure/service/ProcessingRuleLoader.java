@@ -1,6 +1,6 @@
 package com.example.dataprocess.infrastructure.service;
 
-import com.example.dataprocess.domain.model.ProcessingRuleDocument;
+import com.example.dataprocess.domain.model.ProcessingRule;
 import com.example.dataprocess.domain.model.ProcessingRuleItem;
 import org.springframework.stereotype.Component;
 
@@ -10,7 +10,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Loads and parses rule documents for preset templates.
+ * 加工规则加载器。
+ *
+ * <p>根据预置用户模板编码读取规则资源文件，并解析为本次工作流使用的完整加工规则。</p>
  */
 @Component
 public class ProcessingRuleLoader {
@@ -24,7 +26,10 @@ public class ProcessingRuleLoader {
         this.markdownResourceService = markdownResourceService;
     }
 
-    public ProcessingRuleDocument load(String presetTemplateCode) {
+    /**
+     * 加载指定预置用户模板对应的完整加工规则。
+     */
+    public ProcessingRule load(String presetTemplateCode) {
         String resourcePath = RULES_RESOURCE_PREFIX + presetTemplateCode + RULES_RESOURCE_SUFFIX;
         String markdown = markdownResourceService.readUtf8Resource(resourcePath);
 
@@ -73,7 +78,7 @@ public class ProcessingRuleLoader {
             throw new IllegalStateException("Rule document filename does not match presetTemplateCode: " + presetTemplateCode);
         }
 
-        return new ProcessingRuleDocument(
+        return new ProcessingRule(
                 parsedPresetTemplateCode,
                 requireAttribute(documentAttributes, "presetTemplateName", presetTemplateCode),
                 requireAttribute(documentAttributes, "standardTemplateCode", presetTemplateCode),
