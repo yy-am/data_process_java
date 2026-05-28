@@ -83,6 +83,7 @@ public class StructuredConfirmationService {
                 .toList();
 
         // USER_CONFIRM 且没有 options 的规则，生成用户手工输入确认项。
+        // todo，此处待修改为读取必填字段配置。
         List<InputConfirmation> inputConfirmations = processingRule.ruleItems().stream()
                 .filter(ruleItem -> USER_CONFIRM_RULE_TYPE.equals(ruleItem.ruleType()))
                 .filter(ruleItem -> ruleItem.options().isEmpty())
