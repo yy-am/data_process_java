@@ -2,8 +2,6 @@ package com.example.dataprocess.infrastructure.service;
 
 import org.springframework.stereotype.Service;
 
-import java.util.Map;
-
 /**
  * 提示词模板加载服务。
  *
@@ -52,14 +50,4 @@ public class PromptTemplateService {
         return markdown.substring(firstLineBreak + 1, codeFenceEnd).trim();
     }
 
-    /**
-     * 使用显式占位符替换生成最终提示词。
-     */
-    public String renderPrompt(String template, Map<String, String> variables) {
-        String rendered = template;
-        for (Map.Entry<String, String> entry : variables.entrySet()) {
-            rendered = rendered.replace("{" + entry.getKey() + "}", entry.getValue());
-        }
-        return rendered;
-    }
 }

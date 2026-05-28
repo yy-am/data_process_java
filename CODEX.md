@@ -12,6 +12,8 @@
 - 新增提示词 `src/main/resources/prompts/processing-plan-dsl-prompt.md`，约束 AI 只能输出表达式片段。
 - 新增 `0527_TODO_CN.md`，记录后续 StateGraph 接入、完整 SQL 拼接、DWS 执行、结果校验等待办。
 - 更新 `CURRENT_WORKFLOW_DESIGN_CN.md`，同步 actual/elastic 映射和“AI 只生成 expressionSql，系统拼完整 SQL”的设计边界。
+- 模板识别阶段改为把完整模板目录 Markdown 原文交给 AI，结构化目录解析仅用于返回结果校验。
+- 清理未使用代码：删除旧导出预留接口、旧兼容方法和未使用工具方法。
 
 ### 本轮已验证
 

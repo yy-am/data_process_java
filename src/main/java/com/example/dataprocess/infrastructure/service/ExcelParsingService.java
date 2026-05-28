@@ -10,9 +10,6 @@ import org.apache.poi.ss.usermodel.WorkbookFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.ByteArrayInputStream;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -34,30 +31,6 @@ public class ExcelParsingService {
             return parse(inputStream, sheetName, sheetIndex, sampleRowLimit);
         } catch (IOException ex) {
             throw new IllegalStateException("Failed to read uploaded Excel file.", ex);
-        }
-    }
-
-    public ParsedExcelContent parse(File excelFile, String sheetName, Integer sheetIndex, Integer sampleRowLimit) {
-        if (excelFile == null || !excelFile.exists() || !excelFile.isFile()) {
-            throw new IllegalArgumentException("Excel file does not exist or is invalid.");
-        }
-
-        try (InputStream inputStream = new FileInputStream(excelFile)) {
-            return parse(inputStream, sheetName, sheetIndex, sampleRowLimit);
-        } catch (IOException ex) {
-            throw new IllegalStateException("Failed to read local Excel file.", ex);
-        }
-    }
-
-    public ParsedExcelContent parse(byte[] excelBytes, String sheetName, Integer sheetIndex, Integer sampleRowLimit) {
-        if (excelBytes == null || excelBytes.length == 0) {
-            throw new IllegalArgumentException("Excel bytes must not be empty.");
-        }
-
-        try (InputStream inputStream = new ByteArrayInputStream(excelBytes)) {
-            return parse(inputStream, sheetName, sheetIndex, sampleRowLimit);
-        } catch (IOException ex) {
-            throw new IllegalStateException("Failed to read Excel bytes.", ex);
         }
     }
 

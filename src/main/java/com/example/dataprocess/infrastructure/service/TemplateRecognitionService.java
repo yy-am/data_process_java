@@ -2,7 +2,6 @@ package com.example.dataprocess.infrastructure.service;
 
 import com.example.dataprocess.domain.model.InputSnapshot;
 import com.example.dataprocess.domain.model.PresetUserTemplateDefinition;
-import com.example.dataprocess.domain.model.StandardTemplateDefinition;
 import com.example.dataprocess.domain.model.TemplateRecognitionResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,7 +15,10 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Performs a single template recognition call against the uploaded input snapshot.
+ * 模板识别服务。
+ *
+ * <p>它把用户上传文件的输入快照和完整模板目录 Markdown 原文交给 AI，
+ * 由 AI 从目录中选择最匹配的预置用户模板。</p>
  */
 @Service
 public class TemplateRecognitionService {
@@ -42,37 +44,40 @@ public class TemplateRecognitionService {
         this.userPromptTemplate = promptTemplateService.loadPromptSection(PROMPT_RESOURCE_PATH, "User Prompt Template");
     }
 
+    /**
+     * 根据输入快照和完整模板目录识别预置用户模板。
+     */
     public TemplateRecognitionResult recognize(InputSnapshot inputSnapshot) {
+        String templateCatalogMarkdown = templateCatalogService.readTemplateCatalogMarkdown();
         List<PresetUserTemplateDefinition> presetTemplates = templateCatalogService.readPresetTemplateCatalog();
-        List<StandardTemplateDefinition> standardTemplates = presetTemplates.stream()
-                .map(PresetUserTemplateDefinition::standardTemplateCode)
-                .distinct()
-                .map(templateCatalogService::getRequiredStandardTemplate)
-                .toList();
 
         TemplateRecognitionResult result = ChatClient.create(chatModel)
                 .prompt()
                 .system(systemPromptTemplate)
-                .user(buildUserPrompt(inputSnapshot, presetTemplates, standardTemplates))
+                .user(buildUserPrompt(inputSnapshot, templateCatalogMarkdown))
                 .call()
                 .entity(TemplateRecognitionResult.class);
 
         return normalizeAndValidateResult(result, presetTemplates);
     }
 
+    /**
+     * 构造模板识别提示词，模板目录保持 Markdown 原文，不提前改写成结构化列表。
+     */
     private String buildUserPrompt(
             InputSnapshot inputSnapshot,
-            List<PresetUserTemplateDefinition> presetTemplates,
-            List<StandardTemplateDefinition> standardTemplates
+            String templateCatalogMarkdown
     ) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("inputSnapshot", inputSnapshot);
-        payload.put("presetTemplates", presetTemplates);
-        payload.put("standardTemplates", standardTemplates);
+        payload.put("templateCatalogMarkdown", templateCatalogMarkdown);
 
         return userPromptTemplate.replace("{payload-json}", writeJson(payload));
     }
 
+    /**
+     * 校验 AI 返回结果必须来自模板目录解析出的预置模板关系。
+     */
     private TemplateRecognitionResult normalizeAndValidateResult(
             TemplateRecognitionResult result,
             List<PresetUserTemplateDefinition> presetTemplates
@@ -120,10 +125,16 @@ public class TemplateRecognitionService {
         );
     }
 
+    /**
+     * 判断字符串是否为空白。
+     */
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
     }
 
+    /**
+     * 将模板识别上下文序列化为 JSON。
+     */
     private String writeJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value);

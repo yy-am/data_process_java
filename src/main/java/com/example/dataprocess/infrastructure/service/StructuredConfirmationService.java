@@ -103,13 +103,6 @@ public class StructuredConfirmationService {
     }
 
     /**
-     * 兼容旧调用方：只返回结构化确认项。
-     */
-    public UserConfirmationItems buildUserConfirmationItems(TaskSession session) {
-        return buildUserConfirmation(session).userConfirmationItems();
-    }
-
-    /**
      * 校验用户提交的确认结果，并转换成后续工作流使用的领域对象。
      */
     public UserConfirmationResult applyConfirmationRequest(UserConfirmationItems pendingItems, UserConfirmationRequest request) {

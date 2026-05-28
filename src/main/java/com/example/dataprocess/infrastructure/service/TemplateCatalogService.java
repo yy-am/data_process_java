@@ -29,6 +29,15 @@ public class TemplateCatalogService {
     }
 
     /**
+     * 读取完整模板目录 Markdown 原文。
+     *
+     * <p>模板识别阶段应把完整目录原文交给 AI 理解，不提前裁剪成结构化列表，避免丢失目录中的上下文说明。</p>
+     */
+    public String readTemplateCatalogMarkdown() {
+        return markdownResourceService.readUtf8Resource(TEMPLATE_CATALOG_RESOURCE_PATH);
+    }
+
+    /**
      * 读取全部预置用户模板定义。
      */
     public List<PresetUserTemplateDefinition> readPresetTemplateCatalog() {
@@ -59,7 +68,7 @@ public class TemplateCatalogService {
      * 解析模板目录文档。
      */
     private CatalogDocument parseCatalogDocument() {
-        String markdown = markdownResourceService.readUtf8Resource(TEMPLATE_CATALOG_RESOURCE_PATH);
+        String markdown = readTemplateCatalogMarkdown();
         List<StandardTemplateDefinition> standardTemplates = new ArrayList<>();
         List<PresetUserTemplateDefinition> presetTemplates = new ArrayList<>();
 

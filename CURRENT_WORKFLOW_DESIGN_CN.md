@@ -317,7 +317,7 @@ START
 
 1. `compile_processing_plan_dsl` 如何接入 StateGraph 继续评审。
 2. DSL 到完整 DWS SQL 的系统拼接策略继续评审。
-3. 第一段 Excel 全量导入弹性域临时表由外部实现，本工作流只消费 actual/elastic 映射。
+3. 第一段 Excel 全量导入弹性域临时表暂不由当前代码实现，本工作流只消费后续传入的 actual/elastic 映射。
 4. DWS 执行、错误行处理、任务进度统计继续评审。
 
 ### 7.2 旧 rule_drafting 节点
