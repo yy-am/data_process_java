@@ -4,12 +4,12 @@ import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
 import com.example.dataprocess.agent.model.AgentWorkflowStage;
-import com.example.dataprocess.agent.model.DataProcessingAgentRequest;
 import com.example.dataprocess.agent.model.DataProcessingAgentResponse;
 import com.example.dataprocess.agent.model.DataProcessingAgentState;
 import com.example.dataprocess.agent.model.ParsedExcelFile;
 import com.example.dataprocess.agent.tool.AgentStateTool;
 import com.example.dataprocess.agent.tool.ParsedExcelFileTool;
+import com.example.dataprocess.interfaces.restful.request.DataProcessingTaskRequest;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -42,7 +42,7 @@ public class DataProcessingReactAgentService {
         this.objectMapper = objectMapper;
     }
 
-    public DataProcessingAgentResponse run(DataProcessingAgentRequest request) {
+    public DataProcessingAgentResponse run(DataProcessingTaskRequest request) {
         String parsedFileRef = ensureParsedFileRef(request);
         try {
             AssistantMessage message = dataProcessingReactAgent.call(
@@ -72,25 +72,21 @@ public class DataProcessingReactAgentService {
         }
     }
 
-    private String ensureParsedFileRef(DataProcessingAgentRequest request) {
+    private String ensureParsedFileRef(DataProcessingTaskRequest request) {
         return stateTool.loadTaskState(request.taskId())
                 .map(DataProcessingAgentState::parsedFileRef)
                 .filter(value -> value != null && !value.isBlank())
                 .orElseGet(() -> {
-                    if (request.taskRequest() == null) {
-                        throw new IllegalArgumentException("首次运行 Agent 必须提供 taskRequest。");
-                    }
-                    ParsedExcelFile parsedExcelFile = parsedExcelFileTool.storeTaskRequest(request.taskRequest());
+                    ParsedExcelFile parsedExcelFile = parsedExcelFileTool.storeTaskRequest(request);
                     return parsedExcelFile.parsedFileRef();
                 });
     }
 
-    private String buildAgentInstruction(DataProcessingAgentRequest request, String parsedFileRef) {
+    private String buildAgentInstruction(DataProcessingTaskRequest request, String parsedFileRef) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("taskId", request.taskId());
         payload.put("parsedFileRef", parsedFileRef);
-        payload.put("taskRequest", request.taskRequest());
-        payload.put("userConfirmationRequest", request.userConfirmationRequest());
+        payload.put("taskRequest", request);
 
         return """
                 请作为数据加工 ReAct Agent 执行一次任务推进。
@@ -99,7 +95,7 @@ public class DataProcessingReactAgentService {
                 必须严格按照 skill 中“运行流程”的步骤和分支调用工具。
                 当前测试范围只允许推进到 USER_CONFIRMATION_REQUIRED 或 USER_CONFIRMED：
                 - 如果需要用户确认，保存状态并返回 USER_CONFIRMATION_REQUIRED。
-                - 如果收到用户确认，校验并保存状态，返回 USER_CONFIRMED。
+                - 如果不需要用户确认，保存状态并返回 USER_CONFIRMED。
                 - 不要调用临时表、SQL 片段、SQL 拼接或写库工具。
 
                 最终必须只输出 DataProcessingAgentResponse JSON，不能输出 Markdown 或解释文字。

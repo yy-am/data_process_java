@@ -1,10 +1,10 @@
 package com.example.dataprocess.agent.interfaces;
 
-import com.example.dataprocess.agent.model.DataProcessingAgentRequest;
 import com.example.dataprocess.agent.model.DataProcessingAgentResponse;
 import com.example.dataprocess.agent.model.ParsedExcelFile;
 import com.example.dataprocess.agent.service.DataProcessingReactAgentService;
 import com.example.dataprocess.agent.tool.ParsedExcelFileTool;
+import com.example.dataprocess.interfaces.restful.request.DataProcessingTaskRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
 import org.springframework.validation.annotation.Validated;
@@ -53,7 +53,7 @@ public class DataProcessingAgentInterface {
     }
 
     @PostMapping("/run")
-    public DataProcessingAgentResponse run(@Valid @RequestBody DataProcessingAgentRequest request) {
+    public DataProcessingAgentResponse run(@Valid @RequestBody DataProcessingTaskRequest request) {
         return agentService.run(request);
     }
 }

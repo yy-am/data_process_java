@@ -5,7 +5,7 @@ import com.alibaba.cloud.ai.graph.agent.hook.modelcalllimit.ModelCallLimitHook;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.alibaba.cloud.ai.graph.agent.interceptor.toolerror.ToolErrorInterceptor;
 import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
-import com.alibaba.cloud.ai.graph.skills.registry.classpath.ClasspathSkillRegistry;
+import com.alibaba.cloud.ai.graph.skills.registry.filesystem.FileSystemSkillRegistry;
 import com.example.dataprocess.agent.tool.DataProcessingAgentToolMethods;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.context.annotation.Bean;
@@ -24,8 +24,8 @@ public class DataProcessingReactAgentConfig {
             ChatModel chatModel,
             DataProcessingAgentToolMethods toolMethods
     ) {
-        ClasspathSkillRegistry skillRegistry = ClasspathSkillRegistry.builder()
-                .classpathPath("agent")
+        FileSystemSkillRegistry skillRegistry = FileSystemSkillRegistry.builder()
+                .projectSkillsDirectory("src/main/resources/agent")
                 .autoLoad(true)
                 .build();
         SkillsAgentHook skillsHook = SkillsAgentHook.builder()
