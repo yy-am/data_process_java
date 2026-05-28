@@ -208,11 +208,11 @@ START
 
 ## 4. DSL 生成上下文设计
 
-该层是后续设计，当前已完成领域模型定义，尚未接入 StateGraph 节点。
+该层是后续设计，当前已完成领域模型与表达式片段生成服务定义，尚未接入 StateGraph 节点。
 
 核心类：`DslGenerationContext`
 
-中文职责：字段绑定识别、用户确认与 DSL 生成之间的边界对象。它按目标列聚合，让后续 DSL 生成节点可以逐个目标列生成确定的加工计划。
+中文职责：字段绑定识别、用户确认与目标列表达式 SQL 片段生成之间的边界对象。它按目标列聚合，只暴露后续 DSL 生成节点需要的信息，不承载来源表、目标表、WHERE 条件等完整 SQL 信息。
 
 字段说明：
 
@@ -229,28 +229,39 @@ START
 
 1. `targetColumn`：目标列名。
 2. `ruleType`：规则类型，例如 `DIRECT_MAPPING`、`CASE_WHEN` 或 `USER_CONFIRM`。
-3. `actualColumns`：用户实际上传文件中参与该目标列生成的字段列表。
+3. `actualColumnMappings`：用户实际上传字段与弹性域字段的映射列表。
 4. `ruleGuide`：规则指导，主要用于 `CASE_WHEN`。
 5. `example`：规则示例，主要用于 `CASE_WHEN`。
 6. `confirmedValue`：用户确认值，主要用于 `USER_CONFIRM`。
+
+核心类：`ActualColumnMapping`
+
+中文职责：描述用户实际上传字段与原始弹性域临时表字段之间的映射关系。
+
+字段说明：
+
+1. `actualColumn`：用户上传 Excel 中的真实表头，用于帮助 AI 理解业务含义。
+2. `elasticColumn`：原始弹性域临时表中的真实字段名，例如 `col1`、`col2`，用于生成可执行 SQL 表达式片段。
 
 重要边界：
 
 1. `ProcessingRuleItem.sourceColumns` 只存在于规则层和上下文构建过程。
 2. `TargetColumnGenerationContext` 不再暴露 `sourceColumn`。
-3. DSL 生成阶段只关心用户实际上传文件中的 `actualColumns`。
+3. DSL 生成阶段同时需要 `actualColumn` 和 `elasticColumn`：`actualColumn` 只用于语义理解，`elasticColumn` 才能进入 `expressionSql`。
+4. AI 不允许生成完整 SQL，只能生成目标列表达式片段；完整 SQL 由系统代码拼接。
 
 ## 5. 未来节点设计
 
 后续建议新增节点：`build_dsl_generation_context`
 
-中文职责：确定性整合 `ProcessingRule`、`VagueBindingRecoResult` 和 `UserConfirmationResult`，生成 `DslGenerationContext`。
+中文职责：确定性整合 `ProcessingRule`、`VagueBindingRecoResult`、`UserConfirmationResult` 和 actual/elastic 映射，生成 `DslGenerationContext`。
 
 输入：
 
 1. `processing_rule`
 2. `vague_binding_reco_result`
 3. `user_confirmation_result`
+4. `actual_elastic_column_mappings`
 
 输出：
 
@@ -262,7 +273,7 @@ START
 2. `NEEDS_CONFIRMATION` 状态如何使用用户确认结果。
 3. `MISSING` 状态如何中断流程。
 4. `USER_CONFIRM` 如何转成 `confirmedValue`。
-5. `actualColumns` 顺序如何与规则中的 `sourceColumns` 对齐。
+5. `actualColumnMappings` 如何由用户实际上传字段和弹性域字段映射生成。
 
 ## 6. 当前 StateGraph 状态字段
 
@@ -279,19 +290,22 @@ START
 9. `user_confirmation_items`：需要前端展示的结构化确认项。
 10. `user_confirmation_request`：前端提交的原始确认请求。
 11. `user_confirmation_result`：后端校验通过后的确认结果。
-12. `final_dsl`：当前旧 DSL 生成结果。
-13. `workflow_stage`：当前工作流阶段。
-14. `current_node`：当前节点名称。
-15. `retry_count`：重试次数。
-16. `error_messages`：错误信息列表。
-17. `trace_logs`：执行轨迹日志列表。
-18. `next_node`：下一个节点名称。
+12. `actual_elastic_column_mappings`：用户实际上传字段与原始弹性域临时表字段的映射，后续待接入。
+13. `dsl_generation_context`：目标列表达式片段生成上下文，后续待接入。
+14. `processing_plan_dsl`：AI 生成并通过校验的目标列表达式片段 DSL，后续待接入。
+15. `final_dsl`：当前旧 DSL 生成结果。
+16. `workflow_stage`：当前工作流阶段。
+17. `current_node`：当前节点名称。
+18. `retry_count`：重试次数。
+19. `error_messages`：错误信息列表。
+20. `trace_logs`：执行轨迹日志列表。
+21. `next_node`：下一个节点名称。
 
 ## 7. 当前已确认但暂缓深入的部分
 
 ### 7.1 ProcessingPlanDsl
 
-当前已定义第一版加工 DSL 模型和操作白名单。
+当前已定义第一版加工 DSL 模型、操作白名单、AI 生成服务和安全校验服务。
 
 操作白名单：
 
@@ -301,9 +315,9 @@ START
 
 暂缓内容：
 
-1. DSL 结构细节继续评审。
-2. DSL 到 DWS SQL 的编译策略继续评审。
-3. Excel 全量导入 DWS staging 的表结构继续评审。
+1. `compile_processing_plan_dsl` 如何接入 StateGraph 继续评审。
+2. DSL 到完整 DWS SQL 的系统拼接策略继续评审。
+3. 第一段 Excel 全量导入弹性域临时表由外部实现，本工作流只消费 actual/elastic 映射。
 4. DWS 执行、错误行处理、任务进度统计继续评审。
 
 ### 7.2 旧 rule_drafting 节点
@@ -315,12 +329,11 @@ START
 ```text
 build_dsl_generation_context
 -> compile_processing_plan_dsl
--> import_excel_to_staging
--> generate_dws_sql
+-> assemble_dws_insert_sql
 -> execute_dws_sql
 ```
 
-其中 DWS 相关阶段暂不在本轮展开。
+其中 Excel 到弹性域临时表的第一段落库不在当前工作流实现范围内；DWS 完整 SQL 拼接与执行暂不在本轮展开。
 
 ## 8. 当前设计结论
 
@@ -329,5 +342,8 @@ build_dsl_generation_context
 3. `VagueBindingRecoItem` 只表示字段绑定识别结果，不承载规则。
 4. `UserConfirmationResult` 只表示用户确认后的结果。
 5. `DslGenerationContext` 是 DSL 生成的边界上下文。
-6. `TargetColumnGenerationContext.actualColumns` 表示用户实际上传文件中参与目标列生成的字段。
-7. `ProcessingPlanDsl` 和 DWS 执行链路后续继续评审。
+6. `TargetColumnGenerationContext.actualColumnMappings` 表示用户实际上传字段与弹性域字段之间的映射。
+7. `ProcessingPlanDsl` 只承载目标列表达式级 SQL 片段，不承载完整 SQL。
+8. AI 只生成 `expressionSql`，系统代码负责拼接目标 IT 临时表写入 SQL。
+9. 目标写入表必须由系统根据标准模板决定，不能由 AI 决定。
+10. DWS 完整执行链路后续继续评审。

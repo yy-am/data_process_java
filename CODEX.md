@@ -1,5 +1,34 @@
 # Progress Notes
 
+## 2026-05-28
+
+### 本轮已实现
+
+- 新增 `ActualColumnMapping`，明确 `actualColumn` 用于 AI 理解用户上传表头含义，`elasticColumn` 用于生成真实可执行 SQL 表达式片段。
+- 调整 `TargetColumnGenerationContext`，将旧 `actualColumns` 改为 `actualColumnMappings`。
+- 调整 `ProcessingPlanDsl` / `ProcessingPlanColumn`，第一版只承载目标列表达式级 SQL 片段，不承载完整 SQL。
+- 新增 `ProcessingPlanDslGenerationService`，负责调用 AI 生成 `ProcessingPlanDsl`。
+- 新增 `ProcessingPlanDslValidator`，校验 AI 输出不能包含完整 SQL、危险关键字、越权弹性域字段或用户上传表头字段名。
+- 新增提示词 `src/main/resources/prompts/processing-plan-dsl-prompt.md`，约束 AI 只能输出表达式片段。
+- 新增 `0527_TODO_CN.md`，记录后续 StateGraph 接入、完整 SQL 拼接、DWS 执行、结果校验等待办。
+- 更新 `CURRENT_WORKFLOW_DESIGN_CN.md`，同步 actual/elastic 映射和“AI 只生成 expressionSql，系统拼完整 SQL”的设计边界。
+
+### 本轮已验证
+
+- 已执行 `mvn -q -DskipTests compile`，编译通过。
+
+### 已实现但未接入
+
+- `ProcessingPlanDslGenerationService` 尚未接入 StateGraph。
+- `build_dsl_generation_context` 节点尚未实现。
+- 完整 DWS SQL 拼接、执行、错误行处理与发布流程尚未实现。
+
+### 下一步计划
+
+- 评审 `DslGenerationContext` 如何由 `ProcessingRule`、`VagueBindingRecoResult`、`UserConfirmationResult` 和 actual/elastic 映射生成。
+- 评审 `compile_processing_plan_dsl` 节点接入 StateGraph 的入参、出参和 state 字段。
+- 设计系统拼接 `INSERT INTO IT_TEMP (...) SELECT expressionSql ... FROM ELASTIC_TEMP ...` 的边界和校验策略。
+
 ## 2026-05-12
 
 ### 本轮已实现
