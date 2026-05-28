@@ -6,8 +6,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -17,7 +15,7 @@ import java.util.Map;
 @Component
 public class RequiredFieldTool {
 
-    private static final Path REQUIRED_FIELDS_PATH = Path.of("agent", "config", "standard-template-required-fields.json");
+    private static final String REQUIRED_FIELDS_RESOURCE_PATH = "agent/config/standard-template-required-fields.json";
 
     private final ObjectMapper objectMapper;
 
@@ -34,17 +32,19 @@ public class RequiredFieldTool {
     }
 
     private Map<String, List<String>> readConfiguredFields() {
-        if (!Files.exists(REQUIRED_FIELDS_PATH)) {
-            return Map.of();
-        }
-        try {
+        try (var inputStream = Thread.currentThread()
+                .getContextClassLoader()
+                .getResourceAsStream(REQUIRED_FIELDS_RESOURCE_PATH)) {
+            if (inputStream == null) {
+                return Map.of();
+            }
             return objectMapper.readValue(
-                    Files.readString(REQUIRED_FIELDS_PATH),
+                    inputStream,
                     new TypeReference<>() {
                     }
             );
         } catch (IOException ex) {
-            throw new IllegalStateException("读取标准模板必填字段配置失败: " + REQUIRED_FIELDS_PATH.toAbsolutePath(), ex);
+            throw new IllegalStateException("读取标准模板必填字段配置失败: " + REQUIRED_FIELDS_RESOURCE_PATH, ex);
         }
     }
 }
