@@ -4,9 +4,8 @@ import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.agent.hook.modelcalllimit.ModelCallLimitHook;
 import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.alibaba.cloud.ai.graph.agent.interceptor.toolerror.ToolErrorInterceptor;
-import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
 import com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry;
-import com.alibaba.cloud.ai.graph.skills.registry.classpath.ClasspathSkillRegistry;
+import com.alibaba.cloud.ai.graph.skills.registry.filesystem.FileSystemSkillRegistry;
 import com.example.dataprocess.agent.tool.DataProcessingAgentToolMethods;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.support.ToolCallbacks;
@@ -14,6 +13,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -27,7 +27,8 @@ public class DataProcessingReactAgentConfig {
 
     private static final String DATA_PROCESSING_SKILL_NAME = "data-processing-agent-skill";
 
-    private static final String CLASSPATH_SKILL_COPY_DIR = "data-processing-agent-skill-cache";
+    private static final Path SOURCE_SKILLS_PATH = Path.of("src", "main", "resources", "agent", "skills")
+            .toAbsolutePath();
 
     @Bean("dataProcessingReactAgent")
     public ReactAgent dataProcessingReactAgent(
@@ -35,10 +36,7 @@ public class DataProcessingReactAgentConfig {
             DataProcessingAgentToolMethods toolMethods
     ) {
         ToolCallback[] dataProcessingTools = ToolCallbacks.from(toolMethods);
-        SkillRegistry skillRegistry = ClasspathSkillRegistry.builder()
-                .classpathPath("agent/skills")
-                .basePath(Path.of(System.getProperty("java.io.tmpdir"), CLASSPATH_SKILL_COPY_DIR).toString())
-                .build();
+        SkillRegistry skillRegistry = buildSkillRegistry();
         SkillsAgentHook skillsAgentHook = SkillsAgentHook.builder()
                 .skillRegistry(skillRegistry)
                 .groupedTools(Map.of(DATA_PROCESSING_SKILL_NAME, List.of(dataProcessingTools)))
@@ -62,8 +60,23 @@ public class DataProcessingReactAgentConfig {
                         ModelCallLimitHook.builder().runLimit(12).build()
                 )
                 .interceptors(ToolErrorInterceptor.builder().build())
-                .saver(new MemorySaver())
                 .toolExecutionTimeout(Duration.ofSeconds(30))
                 .build();
+    }
+
+    private SkillRegistry buildSkillRegistry() {
+        if (!Files.exists(SOURCE_SKILLS_PATH)) {
+            throw new IllegalStateException("Skill directory not found: " + SOURCE_SKILLS_PATH);
+        }
+
+        SkillRegistry skillRegistry = FileSystemSkillRegistry.builder()
+                .projectSkillsDirectory(SOURCE_SKILLS_PATH.toString())
+                .build();
+        if (skillRegistry.contains(DATA_PROCESSING_SKILL_NAME)) {
+            return skillRegistry;
+        }
+
+        throw new IllegalStateException("Skill not loaded: " + DATA_PROCESSING_SKILL_NAME
+                + ". Checked skill directory: " + SOURCE_SKILLS_PATH);
     }
 }
