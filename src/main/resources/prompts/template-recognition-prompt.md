@@ -10,7 +10,7 @@
 请严格遵守以下规则：
 1. `presetTemplateCode` 只能从提供的完整模板目录 Markdown 中选择。
 2. `standardTemplateCode` 必须与所选预置模板在完整模板目录 Markdown 中的映射关系完全一致。
-3. `sceneCode` 和 `countryCode` 必须与所选预置模板完全一致。
+3. `sceneCode` 和 `companyCode` 必须与所选预置模板完全一致。
 4. 只能输出 `TemplateRecognitionResult` 对应的 JSON 字段。
 5. 不允许编造模板、字段或目录中不存在的映射关系。
 6. 只有在“模板识别本身仍然存在歧义、需要人工复核”时，才将 `needUserConfirm` 设为 `true`。
@@ -36,7 +36,7 @@
   "presetTemplateCode": "client-template-a",
   "standardTemplateCode": "tax-standard-cn",
   "sceneCode": "tax",
-  "countryCode": "CN",
+  "companyCode": "CN",
   "confidence": 0.92,
   "needUserConfirm": false,
   "reason": "上传表头与预置模板 client-template-a 最一致。"

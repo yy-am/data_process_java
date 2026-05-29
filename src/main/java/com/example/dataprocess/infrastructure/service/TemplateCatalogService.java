@@ -139,7 +139,7 @@ public class TemplateCatalogService {
             standardTemplates.add(new StandardTemplateDefinition(
                     code,
                     requireAttribute(attributes, "sceneCode", code),
-                    requireAttribute(attributes, "countryCode", code),
+                    requireAttribute(attributes, "companyCode", code),
                     splitCsv(requireAttribute(attributes, "standardColumns", code))
             ));
             return;
@@ -149,7 +149,7 @@ public class TemplateCatalogService {
                     code,
                     requireAttribute(attributes, "presetTemplateName", code),
                     requireAttribute(attributes, "sceneCode", code),
-                    requireAttribute(attributes, "countryCode", code),
+                    requireAttribute(attributes, "companyCode", code),
                     requireAttribute(attributes, "standardTemplateCode", code),
                     splitCsv(requireAttribute(attributes, "sourceColumns", code))
             ));

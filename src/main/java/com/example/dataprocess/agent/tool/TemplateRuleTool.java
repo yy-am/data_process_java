@@ -59,15 +59,15 @@ public class TemplateRuleTool {
         if (!presetTemplate.sceneCode().equals(result.sceneCode())) {
             throw new IllegalArgumentException("模板识别结果中的 sceneCode 与目录关系不一致。");
         }
-        if (!presetTemplate.countryCode().equals(result.countryCode())) {
-            throw new IllegalArgumentException("模板识别结果中的 countryCode 与目录关系不一致。");
+        if (!presetTemplate.companyCode().equals(result.companyCode())) {
+            throw new IllegalArgumentException("模板识别结果中的 companyCode 与目录关系不一致。");
         }
 
         return new TemplateRecognitionResult(
                 result.presetTemplateCode(),
                 result.standardTemplateCode(),
                 result.sceneCode(),
-                result.countryCode(),
+                result.companyCode(),
                 result.confidence(),
                 Boolean.FALSE,
                 result.reason()

@@ -7,13 +7,13 @@ import java.util.List;
  *
  * @param standardTemplateCode 标准模板编码
  * @param sceneCode 所属业务场景编码
- * @param countryCode 所属国家编码
+ * @param companyCode 所属公司编码
  * @param standardColumns 标准模板列清单
  */
 public record StandardTemplateDefinition(
         String standardTemplateCode,
         String sceneCode,
-        String countryCode,
+        String companyCode,
         List<String> standardColumns
 ) {
 }

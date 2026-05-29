@@ -91,7 +91,7 @@ CASE WHEN col2 = 'Y' THEN '1' ELSE '0' END
 
 `validate_template_recognition(templateRecognitionResult)`
 
-校验 Agent 识别出的预置模板、标准模板、场景、国家或地区是否来自模板目录且关系正确。
+校验 Agent 识别出的预置模板、标准模板、场景、公司编码是否来自模板目录且关系正确。
 
 `load_template_bundle(presetTemplateCode)`
 
@@ -107,13 +107,17 @@ CASE WHEN col2 = 'Y' THEN '1' ELSE '0' END
 
 ### 确认工具
 
-`validate_field_binding_plan(fieldBindingPlan, inputHeaders, processingRule)`
+`validate_field_binding_plan(taskId, plan)`
 
-校验字段绑定计划。所有候选列、选中列都必须来自本次 Excel 表头；所有目标列和规则源字段都必须来自加工规则。
+校验字段绑定计划。Agent 只需要传入 `taskId` 和推断出的 `plan`；工具会从任务状态中读取本次 Excel 表头和加工规则。所有候选列、选中列都必须来自本次 Excel 表头；所有目标列和规则源字段都必须来自加工规则。
 
-`validate_confirmation_items(confirmationItems, context)`
+`save_field_binding_plan(taskId, plan)`
 
-校验待确认项结构是否合法，确认项不能引用不存在的目标列、源字段、候选列或值集。
+保存已通过工具校验的字段绑定计划。
+
+`build_confirmation_items(taskId)`
+
+根据当前任务状态生成并校验待确认项。确认项不能引用不存在的目标列、源字段、候选列或值集。
 
 `validate_user_confirmation_request(pendingConfirmationItems, userConfirmationRequest)`
 
@@ -211,13 +215,13 @@ Agent 输出的模板识别结果必须包含：
 - `presetTemplateCode`
 - `standardTemplateCode`
 - `sceneCode`
-- `countryCode`
+- `companyCode`
 - `confidence`
 - `reason`
 
 分支：
 
-- 如果工具校验模板不存在、标准模板不匹配、场景或国家不匹配，标记失败。
+- 如果工具校验模板不存在、标准模板不匹配、场景或公司编码不匹配，标记失败。
 - 如果 Agent 无法在模板目录中识别出可信模板，标记失败或返回需要人工处理的失败原因；不要编造模板。
 - 如果校验通过，保存模板识别结果，阶段进入 `TEMPLATE_RECOGNIZED`。
 
@@ -271,16 +275,37 @@ Agent 基于 `sourceHeaders`、`sampleRows`、预置模板和加工规则，先�
 
 `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT` 不是字段绑定状态，也不是字段绑定计划中的规则源字段状态。它们是目标列取值来源类型，必须在第 5 步生成对应的用户确认项。
 
-必须调用：
+必须构造 `FieldBindingPlan`，结构如下：
 
-1. `validate_field_binding_plan(fieldBindingPlan, sourceHeaders, processingRule)`
+```json
+{
+  "items": [
+    {
+      "targetColumn": "目标列",
+      "ruleType": "DIRECT_MAPPING 或 EXPR",
+      "sourceColumn": "加工规则声明的 sourceColumns 中的某个规则源字段",
+      "status": "CONFIRMED 或 NEEDS_CONFIRMATION 或 MISSING",
+      "selectedHeader": "仅 CONFIRMED 时填写，必须是 Excel 原始表头",
+      "candidateHeaders": ["仅 NEEDS_CONFIRMATION 时填写，至少两个 Excel 原始表头"],
+      "reason": "简短中文原因"
+    }
+  ]
+}
+```
+
+字段绑定计划的覆盖范围必须严格等于加工规则中所有 `DIRECT_MAPPING` 和 `EXPR` 规则声明的 `sourceColumns`。不得包含 `USER_CONFIRM_OPTION` 或 `USER_CONFIRM_INPUT`。
+
+必须按顺序调用：
+
+1. `validate_field_binding_plan(taskId, plan)`
+2. `save_field_binding_plan(taskId, validatedPlan)`
 
 分支：
 
 - 如果字段绑定计划引用了不存在的 Excel 表头，标记失败。
 - 如果字段绑定计划遗漏了 `DIRECT_MAPPING` 或 `EXPR` 依赖的规则源字段，标记失败。
 - 如果字段绑定计划包含 `USER_CONFIRM_OPTION` 或 `USER_CONFIRM_INPUT` 的规则项、目标列项、规则源字段项或字段绑定状态，标记失败。
-- 校验通过后保存字段绑定计划。
+- 校验通过后必须保存字段绑定计划。
 
 ### 第 5 步：分析是否需要用户确认
 
@@ -348,7 +373,7 @@ Agent 必须生成确认项集合。确认项分三类，并且必须同时消�
 
 必须调用：
 
-1. `validate_confirmation_items(confirmationItems, context)`
+1. `build_confirmation_items(taskId)`
 
 分支：
 

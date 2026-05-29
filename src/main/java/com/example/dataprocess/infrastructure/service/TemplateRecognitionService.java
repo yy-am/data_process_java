@@ -110,15 +110,15 @@ public class TemplateRecognitionService {
         if (!matchedTemplate.sceneCode().equals(result.sceneCode())) {
             throw new IllegalStateException("sceneCode does not match the catalog mapping.");
         }
-        if (!matchedTemplate.countryCode().equals(result.countryCode())) {
-            throw new IllegalStateException("countryCode does not match the catalog mapping.");
+        if (!matchedTemplate.companyCode().equals(result.companyCode())) {
+            throw new IllegalStateException("companyCode does not match the catalog mapping.");
         }
 
         return new TemplateRecognitionResult(
                 result.presetTemplateCode(),
                 result.standardTemplateCode(),
                 result.sceneCode(),
-                result.countryCode(),
+                result.companyCode(),
                 result.confidence(),
                 Boolean.TRUE.equals(result.needUserConfirm()),
                 result.reason()
