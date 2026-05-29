@@ -9,7 +9,6 @@ import com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry;
 import com.alibaba.cloud.ai.graph.skills.registry.classpath.ClasspathSkillRegistry;
 import com.example.dataprocess.agent.tool.DataProcessingAgentToolMethods;
 import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.prompt.SystemPromptTemplate;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.context.annotation.Bean;
@@ -28,22 +27,7 @@ public class DataProcessingReactAgentConfig {
 
     private static final String DATA_PROCESSING_SKILL_NAME = "data-processing-agent-skill";
 
-    private static final String SKILLS_SYSTEM_PROMPT_TEMPLATE = """
-            ## Skills System
-
-            You have access to a project skill registry.
-
-            ### Available Skills
-
-            {skills_list}
-
-            ### How to Use Skills
-
-            Before doing domain work, choose the matching skill and call `read_skill` with its exact skill name.
-            After reading the skill, follow the SKILL.md instructions strictly and use only the tools made available for that skill.
-
-            {skills_load_instructions}
-            """;
+    private static final String CLASSPATH_SKILL_COPY_DIR = "data-processing-agent-skill-cache";
 
     @Bean("dataProcessingReactAgent")
     public ReactAgent dataProcessingReactAgent(
@@ -53,8 +37,7 @@ public class DataProcessingReactAgentConfig {
         ToolCallback[] dataProcessingTools = ToolCallbacks.from(toolMethods);
         SkillRegistry skillRegistry = ClasspathSkillRegistry.builder()
                 .classpathPath("agent/skills")
-                .basePath(Path.of(System.getProperty("java.io.tmpdir"), "data-processing-agent-skills").toString())
-                .systemPromptTemplate(new SystemPromptTemplate(SKILLS_SYSTEM_PROMPT_TEMPLATE))
+                .basePath(Path.of(System.getProperty("java.io.tmpdir"), CLASSPATH_SKILL_COPY_DIR).toString())
                 .build();
         SkillsAgentHook skillsAgentHook = SkillsAgentHook.builder()
                 .skillRegistry(skillRegistry)
