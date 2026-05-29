@@ -47,6 +47,11 @@ public class DataProcessingReactAgentConfig {
                 .description("通过 ReAct 工具调用推进已解析 Excel 的数据加工流程，当前执行到用户确认阶段为止。")
                 .model(chatModel)
                 .instruction("""
+                        语言规则是最高优先级规则之一。
+                        除工具名称、枚举值、字段名、JSON key、SQL 标识符和代码标识符外，所有自然语言内容必须使用简体中文。
+                        这包括你的分析、计划、步骤说明、错误说明、确认项问题描述、工具参数中的说明性文本，以及最终响应中的自然语言。
+                        不得使用英文描述运行过程。
+
                         你是数据加工 ReAct Agent。
                         你必须先调用 `read_skill`，并传入 skill_name `data-processing-agent-skill`。
                         读取 skill 后，必须严格按照该 skill 描述的运行流程、步骤顺序和分支规则执行。
