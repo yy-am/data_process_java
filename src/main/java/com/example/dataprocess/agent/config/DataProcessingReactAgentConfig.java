@@ -64,7 +64,10 @@ public class DataProcessingReactAgentConfig {
                         new ToolCallbackDeduplicationHook(),
                         ModelCallLimitHook.builder().runLimit(12).build()
                 )
-                .interceptors(ToolErrorInterceptor.builder().build())
+                .interceptors(
+                        new BlankToolInputNormalizingInterceptor(),
+                        ToolErrorInterceptor.builder().build()
+                )
                 .toolExecutionTimeout(Duration.ofSeconds(30))
                 .build();
     }
@@ -84,4 +87,5 @@ public class DataProcessingReactAgentConfig {
         throw new IllegalStateException("Skill not loaded: " + DATA_PROCESSING_SKILL_NAME
                 + ". Checked skill directory: " + SOURCE_SKILLS_PATH);
     }
+
 }
