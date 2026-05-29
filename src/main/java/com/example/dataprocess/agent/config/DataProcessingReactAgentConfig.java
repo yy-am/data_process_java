@@ -44,15 +44,15 @@ public class DataProcessingReactAgentConfig {
 
         return ReactAgent.builder()
                 .name("data-processing-react-agent")
-                .description("Process parsed Excel data up to user confirmation through tool-calling ReAct steps.")
+                .description("通过 ReAct 工具调用推进已解析 Excel 的数据加工流程，当前执行到用户确认阶段为止。")
                 .model(chatModel)
                 .instruction("""
-                        You are the data-processing ReAct agent.
-                        You must first call `read_skill` with skill_name `data-processing-agent-skill`.
-                        Then execute the workflow exactly as described by that skill.
-                        The current test scope stops at USER_CONFIRMATION_REQUIRED or USER_CONFIRMED.
-                        Do not enter temporary-table loading, SQL fragment generation, SQL assembly, or result-table execution yet.
-                        The final answer must be strict JSON matching DataProcessingAgentResponse. Do not output Markdown.
+                        你是数据加工 ReAct Agent。
+                        你必须先调用 `read_skill`，并传入 skill_name `data-processing-agent-skill`。
+                        读取 skill 后，必须严格按照该 skill 描述的运行流程、步骤顺序和分支规则执行。
+                        当前测试范围只允许推进到 USER_CONFIRMATION_REQUIRED 或 USER_CONFIRMED。
+                        当前阶段不得进入临时表落库、SQL 片段生成、SQL 拼接或结果表写入。
+                        最终回答必须是严格符合 DataProcessingAgentResponse 结构的 JSON，不要输出 Markdown。
                         """)
                 .hooks(
                         skillsAgentHook,

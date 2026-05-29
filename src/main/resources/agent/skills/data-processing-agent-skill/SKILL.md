@@ -1,6 +1,6 @@
 ---
 name: data-processing-agent-skill
-description: Drive a ReAct agent to process parsed Excel data into confirmation-ready data-processing tasks, with strict tool usage, confirmation branching, and SQL safety rules.
+description: 驱动 ReAct Agent 按严格工具调用、确认分支和 SQL 安全规则处理已解析 Excel 数据，并推进到数据加工任务的用户确认阶段。
 ---
 
 # 数据加工 ReAct Agent Skill
@@ -235,23 +235,25 @@ Agent 输出的模板识别结果必须包含：
 
 适用阶段：模板、规则、必填字段和值集元数据已加载。
 
-Agent 基于 `sourceHeaders`、`sampleRows`、预置模板和加工规则，为每个需要 Excel 原始列的规则生成字段绑定计划。
+Agent 基于 `sourceHeaders`、`sampleRows`、预置模板和加工规则，先对加工规则按“是否需要 Excel 原始列”进行分流，再只为需要 Excel 原始列的规则生成字段绑定计划。
 
-需要字段绑定的规则类型：
+需要字段绑定的规则类型，也就是第 4 步字段绑定计划的唯一输入范围：
 
 - `DIRECT_MAPPING`
 - `EXPR`
 
-不需要字段绑定的规则类型：
+不参与字段绑定、但必须进入第 5 步确认项分析的规则类型：
 
-- `USER_CONFIRM_OPTION`
-- `USER_CONFIRM_INPUT`
+- `USER_CONFIRM_OPTION`：目标列取值由用户通过前端值集选择决定，第 4 步不得为它生成规则源字段、候选 Excel 列或字段绑定状态。
+- `USER_CONFIRM_INPUT`：目标列取值由用户通过前端手工输入固定值决定，第 4 步不得为它生成规则源字段、候选 Excel 列或字段绑定状态。
 
-字段绑定计划中，每个规则源字段只能出现以下三种状态之一：
+字段绑定计划只描述“规则源字段到 Excel 原始列”的映射关系。对于每个需要字段绑定的规则源字段，只能出现以下三种字段绑定状态之一：
 
 - `CONFIRMED`：可以唯一确定映射到某个 Excel 原始列。
 - `NEEDS_CONFIRMATION`：存在多个语义相近候选列，无法唯一判断。
 - `MISSING`：没有可靠可映射列。
+
+`USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT` 不是字段绑定状态，也不是字段绑定计划中的规则源字段状态。它们是目标列取值来源类型，必须在第 5 步生成对应的用户确认项。
 
 必须调用：
 
@@ -261,14 +263,21 @@ Agent 基于 `sourceHeaders`、`sampleRows`、预置模板和加工规则，为�
 
 - 如果字段绑定计划引用了不存在的 Excel 表头，标记失败。
 - 如果字段绑定计划遗漏了 `DIRECT_MAPPING` 或 `EXPR` 依赖的规则源字段，标记失败。
-- 如果字段绑定计划为 `USER_CONFIRM_OPTION` 或 `USER_CONFIRM_INPUT` 生成了字段绑定，标记失败。
+- 如果字段绑定计划包含 `USER_CONFIRM_OPTION` 或 `USER_CONFIRM_INPUT` 的规则项、目标列项、规则源字段项或字段绑定状态，标记失败。
 - 校验通过后保存字段绑定计划。
 
 ### 第 5 步：分析是否需要用户确认
 
 适用阶段：字段绑定计划已通过校验。
 
-Agent 必须生成确认项集合。确认项分三类。
+Agent 必须生成确认项集合。确认项分三类，并且必须同时消费以下输入：
+
+- 第 4 步保存的字段绑定计划。
+- 第 4 步分流出的 `USER_CONFIRM_OPTION` 规则。
+- 第 4 步分流出的 `USER_CONFIRM_INPUT` 规则。
+- 标准模板必填字段定义。
+
+不得因为 `USER_CONFIRM_OPTION` 或 `USER_CONFIRM_INPUT` 没有出现在字段绑定计划中，就遗漏它们对应的确认项。
 
 #### 5.1 字段映射确认
 
@@ -286,19 +295,20 @@ Agent 必须生成确认项集合。确认项分三类。
 
 触发条件：
 
-- 加工规则中存在 `USER_CONFIRM_OPTION`。
+- 第 4 步分流出的加工规则中存在 `USER_CONFIRM_OPTION`。
 
 确认项要求：
 
 - 包含目标列。
 - 包含值集标识或值集查询元数据。
 - 不要自行展开或编造值集全集。
+- 该确认项来自目标列取值来源，不来自字段绑定计划。
 
 #### 5.3 手工输入确认
 
 触发条件一：
 
-- 加工规则中存在 `USER_CONFIRM_INPUT`。
+- 第 4 步分流出的加工规则中存在 `USER_CONFIRM_INPUT`。
 
 触发条件二：
 
@@ -318,6 +328,7 @@ Agent 必须生成确认项集合。确认项分三类。
 - 用户输入后，该目标字段整列使用用户输入固定值。
 - 这是全量覆盖，不是只填补空值行。
 - 后续 SQL 片段中该目标字段必须是用户输入值对应的常量表达式。
+- `USER_CONFIRM_INPUT` 规则本身不需要 Excel 字段绑定；它天然生成手工输入确认项。
 
 必须调用：
 

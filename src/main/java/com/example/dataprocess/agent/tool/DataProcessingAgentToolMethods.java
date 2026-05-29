@@ -52,33 +52,33 @@ public class DataProcessingAgentToolMethods {
         this.confirmationTool = confirmationTool;
     }
 
-    @Tool(name = "load_task_state", description = "Load the current agent task state by taskId. Returns null when the task has not started.")
-    public DataProcessingAgentState loadTaskState(@ToolParam(description = "Task id") String taskId) {
+    @Tool(name = "load_task_state", description = "根据任务编号读取当前 Agent 任务状态；如果任务尚未开始，返回空。")
+    public DataProcessingAgentState loadTaskState(@ToolParam(description = "任务编号") String taskId) {
         Optional<DataProcessingAgentState> state = stateTool.loadTaskState(taskId);
         return state.orElse(null);
     }
 
-    @Tool(name = "initialize_task_state", description = "Initialize and save a new RECEIVED task state.")
+    @Tool(name = "initialize_task_state", description = "初始化并保存一个新的 RECEIVED 阶段任务状态。")
     public DataProcessingAgentState initializeTaskState(
-            @ToolParam(description = "Task id") String taskId,
-            @ToolParam(description = "Parsed Excel file reference") String parsedFileRef
+            @ToolParam(description = "任务编号") String taskId,
+            @ToolParam(description = "已解析 Excel 文件引用") String parsedFileRef
     ) {
         DataProcessingAgentState state = DataProcessingAgentState.initial(taskId, parsedFileRef)
                 .addTrace("初始化 Agent 任务状态。");
         return stateTool.saveTaskState(state);
     }
 
-    @Tool(name = "read_parsed_excel_summary", description = "Read parsed Excel summary by parsedFileRef.")
+    @Tool(name = "read_parsed_excel_summary", description = "根据已解析文件引用读取 Excel 摘要信息。")
     public ParsedExcelSummary readParsedExcelSummary(
-            @ToolParam(description = "Parsed Excel file reference") String parsedFileRef
+            @ToolParam(description = "已解析 Excel 文件引用") String parsedFileRef
     ) {
         return parsedExcelFileTool.readParsedExcelSummary(parsedFileRef);
     }
 
-    @Tool(name = "save_parsed_excel_summary", description = "Save parsed Excel summary into task state.")
+    @Tool(name = "save_parsed_excel_summary", description = "将已解析 Excel 摘要保存到任务状态中。")
     public DataProcessingAgentState saveParsedExcelSummary(
-            @ToolParam(description = "Task id") String taskId,
-            @ToolParam(description = "Parsed Excel summary") ParsedExcelSummary summary
+            @ToolParam(description = "任务编号") String taskId,
+            @ToolParam(description = "已解析 Excel 摘要") ParsedExcelSummary summary
     ) {
         DataProcessingAgentState state = requiredState(taskId)
                 .withParsedExcelSummary(summary)
@@ -86,22 +86,22 @@ public class DataProcessingAgentToolMethods {
         return stateTool.saveTaskState(state);
     }
 
-    @Tool(name = "load_template_catalog", description = "Load the template catalog markdown.")
+    @Tool(name = "load_template_catalog", description = "加载模板目录 Markdown 原文。")
     public String loadTemplateCatalog() {
         return templateRuleTool.loadTemplateCatalog();
     }
 
-    @Tool(name = "validate_template_recognition", description = "Validate template recognition result against catalog.")
+    @Tool(name = "validate_template_recognition", description = "根据模板目录校验 Agent 推断出的模板识别结果。")
     public TemplateRecognitionResult validateTemplateRecognition(
-            @ToolParam(description = "Agent inferred template recognition result") TemplateRecognitionResult result
+            @ToolParam(description = "Agent 推断出的模板识别结果") TemplateRecognitionResult result
     ) {
         return templateRuleTool.validateTemplateRecognition(result);
     }
 
-    @Tool(name = "save_template_recognition", description = "Save validated template recognition result and move to TEMPLATE_RECOGNIZED.")
+    @Tool(name = "save_template_recognition", description = "保存已校验通过的模板识别结果，并将任务推进到 TEMPLATE_RECOGNIZED 阶段。")
     public DataProcessingAgentState saveTemplateRecognition(
-            @ToolParam(description = "Task id") String taskId,
-            @ToolParam(description = "Validated template recognition result") TemplateRecognitionResult result
+            @ToolParam(description = "任务编号") String taskId,
+            @ToolParam(description = "已校验通过的模板识别结果") TemplateRecognitionResult result
     ) {
         DataProcessingAgentState state = requiredState(taskId)
                 .withTemplateRecognitionResult(result)
@@ -110,33 +110,33 @@ public class DataProcessingAgentToolMethods {
         return stateTool.saveTaskState(state);
     }
 
-    @Tool(name = "load_template_bundle", description = "Load preset template, standard template, and processing rule by presetTemplateCode.")
+    @Tool(name = "load_template_bundle", description = "根据预置模板编码加载预置模板、标准模板和加工规则。")
     public TemplateBundle loadTemplateBundle(
-            @ToolParam(description = "Preset template code") String presetTemplateCode
+            @ToolParam(description = "预置模板编码") String presetTemplateCode
     ) {
         return templateRuleTool.loadTemplateBundle(presetTemplateCode);
     }
 
-    @Tool(name = "load_required_fields", description = "Load required target columns for standard template.")
+    @Tool(name = "load_required_fields", description = "加载标准模板中的必填目标字段集合。")
     public StandardRequiredFields loadRequiredFields(
-            @ToolParam(description = "Standard template code") String standardTemplateCode
+            @ToolParam(description = "标准模板编码") String standardTemplateCode
     ) {
         return requiredFieldTool.loadRequiredFields(standardTemplateCode);
     }
 
-    @Tool(name = "load_value_set_metadata", description = "Load value-set metadata for USER_CONFIRM_OPTION rule items.")
+    @Tool(name = "load_value_set_metadata", description = "加载 USER_CONFIRM_OPTION 加工规则所需的值集元数据。")
     public List<ValueSetMetadata> loadValueSetMetadata(
-            @ToolParam(description = "Processing rule") ProcessingRule processingRule
+            @ToolParam(description = "加工规则") ProcessingRule processingRule
     ) {
         return valueSetTool.loadValueSetMetadata(processingRule);
     }
 
-    @Tool(name = "save_template_context", description = "Save template bundle, required fields, and value-set metadata into task state.")
+    @Tool(name = "save_template_context", description = "将模板包、必填字段和值集元数据保存到任务状态中。")
     public DataProcessingAgentState saveTemplateContext(
-            @ToolParam(description = "Task id") String taskId,
-            @ToolParam(description = "Template bundle") TemplateBundle templateBundle,
-            @ToolParam(description = "Required fields") StandardRequiredFields requiredFields,
-            @ToolParam(description = "Value-set metadata") List<ValueSetMetadata> valueSetMetadata
+            @ToolParam(description = "任务编号") String taskId,
+            @ToolParam(description = "模板上下文包") TemplateBundle templateBundle,
+            @ToolParam(description = "必填字段集合") StandardRequiredFields requiredFields,
+            @ToolParam(description = "值集元数据") List<ValueSetMetadata> valueSetMetadata
     ) {
         DataProcessingAgentState state = requiredState(taskId)
                 .withTemplateContext(templateBundle, requiredFields, valueSetMetadata)
@@ -144,10 +144,10 @@ public class DataProcessingAgentToolMethods {
         return stateTool.saveTaskState(state);
     }
 
-    @Tool(name = "validate_field_binding_plan", description = "Validate field binding plan. Only DIRECT_MAPPING and EXPR sourceColumns may be included.")
+    @Tool(name = "validate_field_binding_plan", description = "校验字段绑定计划；只有 DIRECT_MAPPING 和 EXPR 规则允许包含来源列。")
     public FieldBindingPlan validateFieldBindingPlan(
-            @ToolParam(description = "Task id") String taskId,
-            @ToolParam(description = "Agent inferred field binding plan") FieldBindingPlan plan
+            @ToolParam(description = "任务编号") String taskId,
+            @ToolParam(description = "Agent 推断出的字段绑定计划") FieldBindingPlan plan
     ) {
         DataProcessingAgentState state = requiredState(taskId);
         return fieldBindingValidationTool.validateFieldBindingPlan(
@@ -157,10 +157,10 @@ public class DataProcessingAgentToolMethods {
         );
     }
 
-    @Tool(name = "save_field_binding_plan", description = "Save validated field binding plan into task state.")
+    @Tool(name = "save_field_binding_plan", description = "将已校验通过的字段绑定计划保存到任务状态中。")
     public DataProcessingAgentState saveFieldBindingPlan(
-            @ToolParam(description = "Task id") String taskId,
-            @ToolParam(description = "Validated field binding plan") FieldBindingPlan plan
+            @ToolParam(description = "任务编号") String taskId,
+            @ToolParam(description = "已校验通过的字段绑定计划") FieldBindingPlan plan
     ) {
         DataProcessingAgentState state = requiredState(taskId)
                 .withFieldBindingPlan(plan)
@@ -168,16 +168,16 @@ public class DataProcessingAgentToolMethods {
         return stateTool.saveTaskState(state);
     }
 
-    @Tool(name = "build_confirmation_items", description = "Build and validate confirmation items from current task state. Also checks blank values for required mapped fields.")
-    public List<AgentConfirmationItem> buildConfirmationItems(@ToolParam(description = "Task id") String taskId) {
+    @Tool(name = "build_confirmation_items", description = "根据当前任务状态生成并校验用户确认项，同时检查必填映射字段是否存在空值。")
+    public List<AgentConfirmationItem> buildConfirmationItems(@ToolParam(description = "任务编号") String taskId) {
         DataProcessingAgentState state = requiredState(taskId);
         return confirmationTool.buildConfirmationItems(state);
     }
 
-    @Tool(name = "save_confirmation_items", description = "Save confirmation items and set stage to USER_CONFIRMATION_REQUIRED or USER_CONFIRMED.")
+    @Tool(name = "save_confirmation_items", description = "保存确认项，并根据是否存在确认项将阶段设置为 USER_CONFIRMATION_REQUIRED 或 USER_CONFIRMED。")
     public DataProcessingAgentState saveConfirmationItems(
-            @ToolParam(description = "Task id") String taskId,
-            @ToolParam(description = "Validated confirmation items") List<AgentConfirmationItem> items
+            @ToolParam(description = "任务编号") String taskId,
+            @ToolParam(description = "已校验通过的确认项") List<AgentConfirmationItem> items
     ) {
         DataProcessingAgentState state = requiredState(taskId)
                 .withConfirmationItems(items)
@@ -188,19 +188,19 @@ public class DataProcessingAgentToolMethods {
         return stateTool.saveTaskState(state);
     }
 
-    @Tool(name = "validate_user_confirmation_request", description = "Validate frontend confirmation request against pending confirmation items.")
+    @Tool(name = "validate_user_confirmation_request", description = "根据待确认项校验前端提交的用户确认结果。")
     public List<AgentConfirmationDecision> validateUserConfirmationRequest(
-            @ToolParam(description = "Task id") String taskId,
-            @ToolParam(description = "User confirmation request") AgentUserConfirmationRequest request
+            @ToolParam(description = "任务编号") String taskId,
+            @ToolParam(description = "用户确认提交结果") AgentUserConfirmationRequest request
     ) {
         DataProcessingAgentState state = requiredState(taskId);
         return confirmationTool.validateUserConfirmationRequest(state.confirmationItems(), request);
     }
 
-    @Tool(name = "save_user_confirmation_result", description = "Save validated user confirmation result and move to USER_CONFIRMED.")
+    @Tool(name = "save_user_confirmation_result", description = "保存已校验通过的用户确认结果，并将任务推进到 USER_CONFIRMED 阶段。")
     public DataProcessingAgentState saveUserConfirmationResult(
-            @ToolParam(description = "Task id") String taskId,
-            @ToolParam(description = "Validated confirmation decisions") List<AgentConfirmationDecision> decisions
+            @ToolParam(description = "任务编号") String taskId,
+            @ToolParam(description = "已校验通过的确认决策") List<AgentConfirmationDecision> decisions
     ) {
         DataProcessingAgentState state = requiredState(taskId)
                 .withUserConfirmationResult(decisions)
@@ -209,17 +209,17 @@ public class DataProcessingAgentToolMethods {
         return stateTool.saveTaskState(state);
     }
 
-    @Tool(name = "mark_task_failed", description = "Mark current task failed with a code and message.")
+    @Tool(name = "mark_task_failed", description = "使用错误编码和错误信息将当前任务标记为失败。")
     public DataProcessingAgentState markTaskFailed(
-            @ToolParam(description = "Task id") String taskId,
-            @ToolParam(description = "Error code") String errorCode,
-            @ToolParam(description = "Error message") String message
+            @ToolParam(description = "任务编号") String taskId,
+            @ToolParam(description = "错误编码") String errorCode,
+            @ToolParam(description = "错误信息") String message
     ) {
         return stateTool.markTaskFailed(requiredState(taskId), errorCode, message);
     }
 
-    @Tool(name = "get_agent_response", description = "Build the current DataProcessingAgentResponse shape from task state.")
-    public Map<String, Object> getAgentResponse(@ToolParam(description = "Task id") String taskId) {
+    @Tool(name = "get_agent_response", description = "根据当前任务状态构造 DataProcessingAgentResponse 响应结构。")
+    public Map<String, Object> getAgentResponse(@ToolParam(description = "任务编号") String taskId) {
         DataProcessingAgentState state = requiredState(taskId);
         return Map.of(
                 "stage", state.stage(),
