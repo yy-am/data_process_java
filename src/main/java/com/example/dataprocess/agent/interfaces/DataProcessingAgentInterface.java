@@ -1,11 +1,11 @@
 package com.example.dataprocess.agent.interfaces;
 
-import com.example.dataprocess.agent.model.DataProcessingAgentResponse;
 import com.example.dataprocess.agent.model.ParsedExcelFile;
 import com.example.dataprocess.agent.service.DataProcessingReactAgentService;
 import com.example.dataprocess.agent.tool.ParsedExcelFileTool;
 import com.example.dataprocess.interfaces.restful.request.DataProcessingTaskRequest;
 import jakarta.validation.Valid;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.http.MediaType;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.ModelAttribute;
@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Flux;
 
 /**
  * REST entry points for the decoupled data-processing agent flow.
@@ -52,8 +53,8 @@ public class DataProcessingAgentInterface {
         );
     }
 
-    @PostMapping("/run")
-    public DataProcessingAgentResponse run(@Valid @RequestBody DataProcessingTaskRequest request) {
+    @PostMapping(value = "/run", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<AssistantMessage> run(@Valid @RequestBody DataProcessingTaskRequest request) {
         return agentService.run(request);
     }
 }

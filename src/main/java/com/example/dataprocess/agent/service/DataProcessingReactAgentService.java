@@ -1,8 +1,12 @@
 package com.example.dataprocess.agent.service;
 
+import com.alibaba.cloud.ai.graph.NodeOutput;
+import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
+import com.alibaba.cloud.ai.graph.streaming.OutputType;
+import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.example.dataprocess.agent.model.AgentWorkflowStage;
 import com.example.dataprocess.agent.model.DataProcessingAgentResponse;
 import com.example.dataprocess.agent.model.DataProcessingAgentState;
@@ -13,11 +17,18 @@ import com.example.dataprocess.interfaces.restful.request.DataProcessingTaskRequ
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Thin service wrapper around the Spring AI Alibaba ReactAgent.
@@ -42,49 +53,42 @@ public class DataProcessingReactAgentService {
         this.objectMapper = objectMapper;
     }
 
-    public DataProcessingAgentResponse run(DataProcessingTaskRequest request) {
-        String parsedFileRef = ensureParsedFileRef(request);
-        try {
-            AssistantMessage message = dataProcessingReactAgent.call(
-                    buildAgentInstruction(request, parsedFileRef),
-                    RunnableConfig.builder().threadId(request.taskId()).build()
-            );
-            return parseResponse(message.getText());
-        } catch (Exception ex) {
-            if (isMissingAssistantMessageError(ex)) {
-                return stateTool.loadTaskState(request.taskId())
-                        .map(this::toResponse)
-                        .orElseGet(() -> new DataProcessingAgentResponse(
-                                AgentWorkflowStage.FAILED,
-                                request.taskId(),
-                                parsedFileRef,
-                                null,
-                                java.util.List.of(),
-                                java.util.List.of(),
-                                Map.of(),
-                                "REACT_AGENT_NO_ASSISTANT_MESSAGE",
-                                "ReactAgent 未生成最终 AssistantMessage，且未找到可恢复任务状态。"
-                        ));
+    public Flux<AssistantMessage> run(DataProcessingTaskRequest request) {
+        return Flux.defer(() -> {
+            String parsedFileRef = ensureParsedFileRef(request);
+            AtomicReference<AssistantMessage> latestAssistantMessage = new AtomicReference<>();
+            AtomicReference<OverAllState> latestState = new AtomicReference<>();
+            RunnableConfig config = RunnableConfig.builder().threadId(request.taskId()).build();
+
+            Flux<NodeOutput> agentStream;
+            try {
+                agentStream = dataProcessingReactAgent.stream(buildAgentInstruction(request, parsedFileRef), config);
+            } catch (Exception ex) {
+                return Flux.just(toErrorMessage(request, parsedFileRef, ex));
             }
-            DataProcessingAgentState failedState = stateTool.loadTaskState(request.taskId())
-                    .map(state -> stateTool.markTaskFailed(state, "REACT_AGENT_RUN_FAILED", ex.getMessage()))
-                    .orElseGet(() -> stateTool.saveTaskState(
-                            DataProcessingAgentState.initial(request.taskId(), parsedFileRef)
-                                    .withStage(AgentWorkflowStage.FAILED)
-                                    .addError("REACT_AGENT_RUN_FAILED: " + ex.getMessage())
-                    ));
-            return new DataProcessingAgentResponse(
-                    AgentWorkflowStage.FAILED,
-                    failedState.taskId(),
-                    failedState.parsedFileRef(),
-                    failedState.templateRecognitionResult(),
-                    failedState.confirmationItems(),
-                    failedState.userConfirmationResult(),
-                    failedState.summary(),
-                    "REACT_AGENT_RUN_FAILED",
-                    ex.getMessage()
-            );
-        }
+
+            return Flux.concat(
+                    Flux.just(assistantMessage(
+                            "START",
+                            request.taskId(),
+                            null,
+                            "数据加工 Agent 开始运行。",
+                            Map.of("parsedFileRef", parsedFileRef)
+                    )),
+                    agentStream.concatMap(output -> Flux.fromIterable(toAssistantMessages(
+                            request.taskId(),
+                            output,
+                            latestAssistantMessage,
+                            latestState
+                    ))),
+                    Flux.defer(() -> Flux.just(toFinalMessage(
+                            request,
+                            parsedFileRef,
+                            latestAssistantMessage.get(),
+                            latestState.get()
+                    )))
+            ).onErrorResume(ex -> Flux.just(toErrorMessage(request, parsedFileRef, ex)));
+        }).onErrorResume(ex -> Flux.just(toErrorMessage(request, null, ex)));
     }
 
     private String ensureParsedFileRef(DataProcessingTaskRequest request) {
@@ -142,6 +146,269 @@ public class DataProcessingReactAgentService {
         return trimmed;
     }
 
+    private List<AssistantMessage> toAssistantMessages(
+            String taskId,
+            NodeOutput output,
+            AtomicReference<AssistantMessage> latestAssistantMessage,
+            AtomicReference<OverAllState> latestState
+    ) {
+        latestState.set(output.state());
+        latestAssistant(output.state()).ifPresent(latestAssistantMessage::set);
+
+        if (!(output instanceof StreamingOutput<?> streamingOutput)) {
+            return List.of();
+        }
+
+        Message message = streamingOutput.message();
+        if (message instanceof AssistantMessage assistantMessage) {
+            latestAssistantMessage.set(assistantMessage);
+            return assistantMessages(taskId, output.node(), streamingOutput, assistantMessage);
+        }
+
+        if (message instanceof ToolResponseMessage toolResponseMessage) {
+            return List.of(toolResponseMessage(taskId, output.node(), streamingOutput, toolResponseMessage));
+        }
+
+        return List.of();
+    }
+
+    private List<AssistantMessage> assistantMessages(
+            String taskId,
+            String node,
+            StreamingOutput<?> output,
+            AssistantMessage message
+    ) {
+        List<AssistantMessage> messages = new ArrayList<>();
+        if (message.hasToolCalls()) {
+            messages.add(assistantMessage(
+                    "TOOL_CALL",
+                    taskId,
+                    node,
+                    textOrDefault(message, "模型请求调用工具。"),
+                    Map.of(
+                            "outputType", outputTypeName(output),
+                            "toolCalls", message.getToolCalls()
+                    ),
+                    message
+            ));
+            return messages;
+        }
+
+        String text = message.getText();
+        if (text != null && !text.isBlank()) {
+            messages.add(assistantMessage(
+                    output.getOutputType() == OutputType.AGENT_MODEL_STREAMING ? "MODEL_DELTA" : "MODEL_MESSAGE",
+                    taskId,
+                    node,
+                    text,
+                    Map.of("outputType", outputTypeName(output)),
+                    message
+            ));
+        }
+        return messages;
+    }
+
+    private AssistantMessage toolResponseMessage(
+            String taskId,
+            String node,
+            StreamingOutput<?> output,
+            ToolResponseMessage message
+    ) {
+        List<String> toolNames = message.getResponses().stream()
+                .map(ToolResponseMessage.ToolResponse::name)
+                .toList();
+        return assistantMessage(
+                "TOOL_RESULT",
+                taskId,
+                node,
+                "工具调用完成: " + String.join(", ", toolNames),
+                Map.of(
+                        "outputType", outputTypeName(output),
+                        "toolNames", toolNames
+                )
+        );
+    }
+
+    private AssistantMessage toFinalMessage(
+            DataProcessingTaskRequest request,
+            String parsedFileRef,
+            AssistantMessage latestAssistantMessage,
+            OverAllState latestState
+    ) {
+        DataProcessingAgentResponse response = resolveFinalResponse(
+                request,
+                parsedFileRef,
+                latestAssistantMessage,
+                latestState
+        );
+        return assistantMessage(
+                "FINAL",
+                request.taskId(),
+                null,
+                writeJson(response),
+                Map.of("response", response)
+        );
+    }
+
+    private DataProcessingAgentResponse resolveFinalResponse(
+            DataProcessingTaskRequest request,
+            String parsedFileRef,
+            AssistantMessage latestAssistantMessage,
+            OverAllState latestState
+    ) {
+        AssistantMessage assistantMessage = latestAssistantMessage;
+        if (assistantMessage == null) {
+            assistantMessage = latestAssistant(latestState).orElse(null);
+        }
+
+        if (assistantMessage != null && assistantMessage.getText() != null && !assistantMessage.getText().isBlank()) {
+            try {
+                return parseResponse(assistantMessage.getText());
+            } catch (Exception ignored) {
+                // Agent may stop after a deterministic tool response; in that case the persisted task state is authoritative.
+            }
+        }
+
+        return stateTool.loadTaskState(request.taskId())
+                .map(this::toResponse)
+                .orElseGet(() -> new DataProcessingAgentResponse(
+                        AgentWorkflowStage.FAILED,
+                        request.taskId(),
+                        parsedFileRef,
+                        null,
+                        List.of(),
+                        List.of(),
+                        Map.of(),
+                        "REACT_AGENT_NO_FINAL_RESPONSE",
+                        "ReactAgent 流式运行结束，但未生成最终响应且未找到可恢复任务状态。"
+                ));
+    }
+
+    private AssistantMessage toErrorMessage(
+            DataProcessingTaskRequest request,
+            String parsedFileRef,
+            Throwable ex
+    ) {
+        DataProcessingAgentResponse response = toFailedResponse(request, parsedFileRef, ex);
+        return assistantMessage(
+                "ERROR",
+                request.taskId(),
+                null,
+                writeJson(response),
+                Map.of(
+                        "errorCode", response.errorCode(),
+                        "response", response
+                )
+        );
+    }
+
+    private DataProcessingAgentResponse toFailedResponse(
+            DataProcessingTaskRequest request,
+            String parsedFileRef,
+            Throwable ex
+    ) {
+        if (isMissingAssistantMessageError(ex)) {
+            return stateTool.loadTaskState(request.taskId())
+                    .map(this::toResponse)
+                    .orElseGet(() -> new DataProcessingAgentResponse(
+                            AgentWorkflowStage.FAILED,
+                            request.taskId(),
+                            parsedFileRef,
+                            null,
+                            List.of(),
+                            List.of(),
+                            Map.of(),
+                            "REACT_AGENT_NO_ASSISTANT_MESSAGE",
+                            "ReactAgent 未生成最终 AssistantMessage，且未找到可恢复任务状态。"
+                    ));
+        }
+
+        DataProcessingAgentState failedState = stateTool.loadTaskState(request.taskId())
+                .map(state -> stateTool.markTaskFailed(state, "REACT_AGENT_RUN_FAILED", ex.getMessage()))
+                .orElseGet(() -> stateTool.saveTaskState(
+                        DataProcessingAgentState.initial(request.taskId(), parsedFileRef)
+                                .withStage(AgentWorkflowStage.FAILED)
+                                .addError("REACT_AGENT_RUN_FAILED: " + ex.getMessage())
+                ));
+        return new DataProcessingAgentResponse(
+                AgentWorkflowStage.FAILED,
+                failedState.taskId(),
+                failedState.parsedFileRef(),
+                failedState.templateRecognitionResult(),
+                failedState.confirmationItems(),
+                failedState.userConfirmationResult(),
+                failedState.summary(),
+                "REACT_AGENT_RUN_FAILED",
+                ex.getMessage()
+        );
+    }
+
+    private Optional<AssistantMessage> latestAssistant(OverAllState state) {
+        if (state == null) {
+            return Optional.empty();
+        }
+        Object messages = state.value("messages").orElse(null);
+        if (!(messages instanceof List<?> messageList)) {
+            return Optional.empty();
+        }
+        for (int i = messageList.size() - 1; i >= 0; i--) {
+            if (messageList.get(i) instanceof AssistantMessage assistantMessage) {
+                return Optional.of(assistantMessage);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private String outputTypeName(StreamingOutput<?> output) {
+        return output.getOutputType() == null ? "" : output.getOutputType().name();
+    }
+
+    private AssistantMessage assistantMessage(
+            String event,
+            String taskId,
+            String node,
+            String content,
+            Map<String, Object> metadata
+    ) {
+        return assistantMessage(event, taskId, node, content, metadata, null);
+    }
+
+    private AssistantMessage assistantMessage(
+            String event,
+            String taskId,
+            String node,
+            String content,
+            Map<String, Object> metadata,
+            AssistantMessage source
+    ) {
+        Map<String, Object> mergedMetadata = new LinkedHashMap<>();
+        if (source != null && source.getMetadata() != null) {
+            mergedMetadata.putAll(source.getMetadata());
+        }
+        mergedMetadata.put("event", event);
+        mergedMetadata.put("taskId", taskId);
+        if (node != null && !node.isBlank()) {
+            mergedMetadata.put("node", node);
+        }
+        if (metadata != null) {
+            mergedMetadata.putAll(metadata);
+        }
+
+        AssistantMessage.Builder builder = AssistantMessage.builder()
+                .content(content == null ? "" : content)
+                .properties(mergedMetadata);
+        if (source != null) {
+            builder.toolCalls(source.getToolCalls());
+            builder.media(source.getMedia());
+        }
+        return builder.build();
+    }
+
+    private String textOrDefault(AssistantMessage message, String defaultText) {
+        String text = message.getText();
+        return text == null || text.isBlank() ? defaultText : text;
+    }
+
     private String writeJson(Object value) {
         try {
             return objectMapper.writeValueAsString(value);
@@ -180,11 +447,19 @@ public class DataProcessingReactAgentService {
 
     private String responseMessage(DataProcessingAgentState state) {
         return switch (state.stage()) {
+            case RECEIVED -> "任务已接收。";
+            case TASK_CONTEXT_READY -> "任务上下文已准备完成。";
+            case TEMPLATE_CONTEXT_READY -> "模板上下文已准备完成。";
+            case FIELD_BINDING_PLAN_READY -> "字段绑定计划已校验。";
+            case CONFIRMATION_ANALYZED -> "确认项分析已完成。";
             case USER_CONFIRMATION_REQUIRED -> "等待用户确认。";
             case USER_CONFIRMED -> "用户确认阶段已完成。";
+            case POST_CONFIRMATION_CONTEXT_READY -> "确认后的加工上下文已准备完成。";
+            case SQL_GENERATION_CONTEXT_READY -> "SQL 生成上下文已准备完成。";
+            case PROCESSING_SQL_RENDERED -> "完整 SQL 已生成，等待落表执行实现接入。";
+            case RESULT_TABLE_WRITTEN -> "结果表已写入。";
             case FAILED -> "任务失败。";
             case COMPLETED -> "任务已完成。";
-            default -> "任务阶段: " + state.stage();
         };
     }
 }
