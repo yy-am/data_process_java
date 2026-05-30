@@ -82,7 +82,12 @@ public class DataProcessingAgentToolMethods {
         if (state.parsedExcelSummary() == null) {
             ParsedExcelSummary summary = parsedExcelFileTool.readParsedExcelSummary(state.parsedFileRef());
             state = stateTool.saveTaskState(state.withParsedExcelSummary(summary)
+                    .withStage(AgentWorkflowStage.TASK_CONTEXT_READY)
                     .addTrace("读取并保存解析文件摘要。"));
+        } else if (state.stage() == AgentWorkflowStage.RECEIVED) {
+            state = stateTool.saveTaskState(state
+                    .withStage(AgentWorkflowStage.TASK_CONTEXT_READY)
+                    .addTrace("解析文件摘要已存在，任务上下文已就绪。"));
         }
 
         Map<String, Object> result = baseContext(state);
@@ -115,7 +120,7 @@ public class DataProcessingAgentToolMethods {
 
         DataProcessingAgentState state = requiredState(taskId)
                 .withTemplateRecognitionResult(validatedResult)
-                .withStage(AgentWorkflowStage.TEMPLATE_RECOGNIZED)
+                .withStage(AgentWorkflowStage.TEMPLATE_CONTEXT_READY)
                 .withTemplateContext(templateBundle, requiredFields, valueSetMetadata)
                 .addTrace("完成模板识别校验，并加载模板上下文。");
         state = stateTool.saveTaskState(state);
@@ -145,6 +150,7 @@ public class DataProcessingAgentToolMethods {
         );
 
         DataProcessingAgentState stateWithPlan = currentState.withFieldBindingPlan(validatedPlan)
+                .withStage(AgentWorkflowStage.FIELD_BINDING_PLAN_READY)
                 .addTrace("完成字段绑定计划校验。");
         List<AgentConfirmationItem> confirmationItems = confirmationTool.buildConfirmationItems(stateWithPlan);
         AgentWorkflowStage nextStage = confirmationItems.isEmpty()
@@ -188,7 +194,15 @@ public class DataProcessingAgentToolMethods {
             @ToolParam(description = "prepare_sql_generation_context 工具返回的 SQL 生成上下文") AgentSqlGenerationContext sqlGenerationContext,
             @ToolParam(description = "Agent 生成的目标列 SQL 表达式片段计划") ProcessingPlanDsl processingPlanDsl
     ) {
-        return processingPlanSqlTool.renderInsertSelectSql(taskId, sqlGenerationContext, processingPlanDsl);
+        RenderedProcessingSql renderedSql = processingPlanSqlTool.renderInsertSelectSql(
+                taskId,
+                sqlGenerationContext,
+                processingPlanDsl
+        );
+        stateTool.saveTaskState(requiredState(taskId)
+                .withStage(AgentWorkflowStage.PROCESSING_SQL_RENDERED)
+                .addTrace("完成 SQL 片段校验并拼接完整 INSERT SELECT SQL。"));
+        return renderedSql;
     }
 
     /**
@@ -234,6 +248,7 @@ public class DataProcessingAgentToolMethods {
     public DataProcessingAgentState saveParsedExcelSummary(String taskId, ParsedExcelSummary summary) {
         DataProcessingAgentState state = requiredState(taskId)
                 .withParsedExcelSummary(summary)
+                .withStage(AgentWorkflowStage.TASK_CONTEXT_READY)
                 .addTrace("读取解析文件摘要。");
         return stateTool.saveTaskState(state);
     }
@@ -288,6 +303,7 @@ public class DataProcessingAgentToolMethods {
     ) {
         DataProcessingAgentState state = requiredState(taskId)
                 .withTemplateContext(templateBundle, requiredFields, valueSetMetadata)
+                .withStage(AgentWorkflowStage.TEMPLATE_CONTEXT_READY)
                 .addTrace("加载模板、规则、必填字段和值集元数据。");
         return stateTool.saveTaskState(state);
     }
@@ -310,6 +326,7 @@ public class DataProcessingAgentToolMethods {
     public DataProcessingAgentState saveFieldBindingPlan(String taskId, FieldBindingPlan plan) {
         DataProcessingAgentState state = requiredState(taskId)
                 .withFieldBindingPlan(plan)
+                .withStage(AgentWorkflowStage.FIELD_BINDING_PLAN_READY)
                 .addTrace("完成字段绑定计划校验。");
         return stateTool.saveTaskState(state);
     }
@@ -387,13 +404,17 @@ public class DataProcessingAgentToolMethods {
 
     private String nextAction(DataProcessingAgentState state) {
         return switch (state.stage()) {
-            case RECEIVED -> "请调用 load_template_catalog，并基于模板目录和 Excel 摘要识别模板。";
-            case TEMPLATE_RECOGNIZED -> "请基于已加载的模板上下文生成 FieldBindingPlan，然后调用 accept_field_binding_plan。";
+            case RECEIVED -> "请先通过 prepare_task_context 加载解析文件摘要。";
+            case TASK_CONTEXT_READY -> "请调用 load_template_catalog，并基于模板目录和 Excel 摘要识别模板。";
+            case TEMPLATE_RECOGNIZED, TEMPLATE_CONTEXT_READY -> "请基于已加载的模板上下文生成 FieldBindingPlan，然后调用 accept_field_binding_plan。";
+            case FIELD_BINDING_PLAN_READY, CONFIRMATION_ANALYZED -> "请调用 accept_field_binding_plan 生成确认分析结果，或直接返回已有确认分析响应。";
             case USER_CONFIRMATION_REQUIRED -> "请直接返回 agentResponse，等待前端提交用户确认结果。";
             case USER_CONFIRMED -> "请调用 prepare_sql_generation_context 准备 SQL 生成上下文。";
+            case SQL_GENERATION_CONTEXT_READY -> "请生成 ProcessingPlanDsl，然后调用 execute_processing_plan。";
+            case PROCESSING_SQL_RENDERED -> "完整 SQL 已生成，请直接返回 agentResponse 或最终 SQL 生成结果。";
+            case RESULT_TABLE_WRITTEN -> "结果表写入已完成，请返回完成响应。";
             case FAILED -> "任务已失败，请直接返回 agentResponse。";
             case COMPLETED -> "任务已完成，请直接返回 agentResponse。";
-            default -> "请按照 skill 中定义的下一步继续执行。";
         };
     }
 
@@ -428,10 +449,19 @@ public class DataProcessingAgentToolMethods {
 
     private String responseMessage(DataProcessingAgentState state) {
         return switch (state.stage()) {
+            case RECEIVED -> "任务已接收。";
+            case TASK_CONTEXT_READY -> "任务上下文已准备完成。";
+            case TEMPLATE_RECOGNIZED -> "模板识别已完成。";
+            case TEMPLATE_CONTEXT_READY -> "模板上下文已准备完成。";
+            case FIELD_BINDING_PLAN_READY -> "字段绑定计划已校验。";
+            case CONFIRMATION_ANALYZED -> "确认项分析已完成。";
             case USER_CONFIRMATION_REQUIRED -> "等待用户确认。";
             case USER_CONFIRMED -> "用户确认阶段已完成。";
+            case SQL_GENERATION_CONTEXT_READY -> "SQL 生成上下文已准备完成。";
+            case PROCESSING_SQL_RENDERED -> "完整 SQL 已生成，等待落表执行实现接入。";
+            case RESULT_TABLE_WRITTEN -> "结果表已写入。";
             case FAILED -> "任务失败。";
-            default -> "任务阶段: " + state.stage();
+            case COMPLETED -> "任务已完成。";
         };
     }
 }

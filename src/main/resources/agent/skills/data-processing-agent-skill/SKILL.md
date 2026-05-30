@@ -94,10 +94,27 @@ Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地�
 如果合并工具已经返回最终阶段响应，必须停止继续调用工具：
 
 - `USER_CONFIRMATION_REQUIRED`：等待前端用户确认。
+- `PROCESSING_SQL_RENDERED`：完整 SQL 已生成，等待落表执行实现接入。
 - `FAILED`：任务失败。
 - `COMPLETED`：任务完成。
 
 `USER_CONFIRMED` 不是最终完成阶段，而是确认后流程的起点。进入该阶段后必须继续执行第 6 步。
+
+阶段含义：
+
+- `RECEIVED`：任务已创建，但尚未完成解析文件摘要加载。
+- `TASK_CONTEXT_READY`：解析文件摘要已加载，可以进入模板识别。
+- `TEMPLATE_RECOGNIZED`：模板识别结果已保存。该阶段用于兼容旧流程，新流程通常直接进入 `TEMPLATE_CONTEXT_READY`。
+- `TEMPLATE_CONTEXT_READY`：模板识别、标准模板、加工规则、必填字段和值集元数据均已准备完成。
+- `FIELD_BINDING_PLAN_READY`：字段绑定计划已接收并校验。该阶段通常不会长期停留。
+- `CONFIRMATION_ANALYZED`：用户确认项分析已完成。该阶段用于表达确认项分析中间态。
+- `USER_CONFIRMATION_REQUIRED`：需要前端用户确认。
+- `USER_CONFIRMED`：用户确认已完成，或无需用户确认；可以进入 SQL 生成流程。
+- `SQL_GENERATION_CONTEXT_READY`：临时表和 SQL 生成上下文已准备完成。
+- `PROCESSING_SQL_RENDERED`：完整 `INSERT SELECT` SQL 已拼接完成，但尚未执行落表。
+- `RESULT_TABLE_WRITTEN`：结果表写入已执行。
+- `COMPLETED`：任务完整完成。
+- `FAILED`：任务失败。
 
 ## 严格运行流程
 
@@ -114,8 +131,10 @@ prepare_task_context(taskId, parsedFileRef)
 - 如果阶段是 `USER_CONFIRMATION_REQUIRED`，且本次输入包含非空 `userConfirmationRequest`，进入第 5 步。
 - 如果阶段是 `USER_CONFIRMATION_REQUIRED`，且本次输入不包含 `userConfirmationRequest`，直接返回工具结果中的 `agentResponse`，等待前端确认。
 - 如果阶段是 `USER_CONFIRMED`，进入第 6 步。
-- 如果阶段是 `FAILED` 或 `COMPLETED`，直接返回工具结果中的 `agentResponse`。
-- 如果阶段是 `RECEIVED` 或尚未完成模板识别，进入第 2 步。
+- 如果阶段是 `SQL_GENERATION_CONTEXT_READY`，进入第 7 步。
+- 如果阶段是 `PROCESSING_SQL_RENDERED`、`RESULT_TABLE_WRITTEN`、`FAILED` 或 `COMPLETED`，直接返回工具结果中的 `agentResponse`。
+- 如果阶段是 `RECEIVED`、`TASK_CONTEXT_READY` 或尚未完成模板识别，进入第 2 步。
+- 如果阶段是 `TEMPLATE_RECOGNIZED`、`TEMPLATE_CONTEXT_READY`、`FIELD_BINDING_PLAN_READY` 或 `CONFIRMATION_ANALYZED`，进入第 3 步或第 4 步中尚未完成的步骤。
 
 成功进入第 2 步前，必须确认 `parsedExcelSummary.sourceHeaders` 非空。若为空，调用 `mark_task_failed`。
 
@@ -233,6 +252,7 @@ accept_field_binding_plan(taskId, fieldBindingPlan)
 
 - 如果返回 `USER_CONFIRMATION_REQUIRED`，必须立即返回该响应，不得继续执行。
 - 如果返回 `USER_CONFIRMED`，进入第 6 步。
+- 如果返回 `PROCESSING_SQL_RENDERED`，必须立即返回该响应，不得继续执行。
 - 如果返回 `FAILED`，必须立即返回该响应。
 
 ### 第 5 步：处理用户确认提交
@@ -248,7 +268,7 @@ submit_user_confirmation(taskId, userConfirmationRequest)
 根据工具返回分支：
 
 - 如果返回 `USER_CONFIRMED`，进入第 6 步。
-- 如果返回 `USER_CONFIRMATION_REQUIRED` 或 `FAILED`，必须立即返回该响应，不得继续执行。
+- 如果返回 `USER_CONFIRMATION_REQUIRED`、`PROCESSING_SQL_RENDERED` 或 `FAILED`，必须立即返回该响应，不得继续执行。
 
 ### 第 6 步：落临时表并准备 SQL 生成上下文
 
@@ -347,7 +367,7 @@ execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)
 
 根据工具返回分支：
 
-- 如果工具返回完整 SQL，必须将 SQL 放入最终响应的 `summary.insertSelectSql`，并说明当前落表执行尚未接入。
+- 如果工具返回完整 SQL，最终响应阶段必须使用 `PROCESSING_SQL_RENDERED`，必须将 SQL 放入最终响应的 `summary.insertSelectSql`，并说明当前落表执行尚未接入。
 - 如果返回 `FAILED` 或工具报错，必须立即返回失败响应。
 - 不得在工具返回后自行修改完整 SQL 或执行结果。
 
@@ -395,7 +415,7 @@ execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)
 
 ```json
 {
-  "stage": "USER_CONFIRMED",
+  "stage": "PROCESSING_SQL_RENDERED",
   "taskId": "...",
   "parsedFileRef": "...",
   "templateRecognitionResult": {},
