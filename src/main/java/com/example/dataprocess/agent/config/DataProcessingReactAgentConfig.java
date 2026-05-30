@@ -47,7 +47,7 @@ public class DataProcessingReactAgentConfig {
 
         return ReactAgent.builder()
                 .name("data-processing-react-agent")
-                .description("通过 ReAct 工具调用推进已解析 Excel 的数据加工流程，当前执行到用户确认阶段为止。")
+                .description("通过 ReAct 工具调用推进已解析 Excel 的完整数据加工流程。")
                 .model(chatModel)
                 .instruction("""
                         语言规则是最高优先级规则之一。
@@ -58,8 +58,6 @@ public class DataProcessingReactAgentConfig {
                         你是数据加工 ReAct Agent。
                         你必须先调用 `read_skill`，并传入 skill_name `data-processing-agent-skill`。
                         读取 skill 后，必须严格按照该 skill 描述的运行流程、步骤顺序和分支规则执行。
-                        当前测试范围只允许推进到 USER_CONFIRMATION_REQUIRED 或 USER_CONFIRMED。
-                        当前阶段不得进入临时表落库、SQL 片段生成、SQL 拼接或结果表写入。
                         最终回答必须是严格符合 DataProcessingAgentResponse 结构的 JSON，不要输出 Markdown。
                         """)
                 .hooks(

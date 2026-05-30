@@ -51,6 +51,21 @@ public class DataProcessingReactAgentService {
             );
             return parseResponse(message.getText());
         } catch (Exception ex) {
+            if (isMissingAssistantMessageError(ex)) {
+                return stateTool.loadTaskState(request.taskId())
+                        .map(this::toResponse)
+                        .orElseGet(() -> new DataProcessingAgentResponse(
+                                AgentWorkflowStage.FAILED,
+                                request.taskId(),
+                                parsedFileRef,
+                                null,
+                                java.util.List.of(),
+                                java.util.List.of(),
+                                Map.of(),
+                                "REACT_AGENT_NO_ASSISTANT_MESSAGE",
+                                "ReactAgent 未生成最终 AssistantMessage，且未找到可恢复任务状态。"
+                        ));
+            }
             DataProcessingAgentState failedState = stateTool.loadTaskState(request.taskId())
                     .map(state -> stateTool.markTaskFailed(state, "REACT_AGENT_RUN_FAILED", ex.getMessage()))
                     .orElseGet(() -> stateTool.saveTaskState(
@@ -93,10 +108,8 @@ public class DataProcessingReactAgentService {
 
                 必须先读取并遵守 skill: data-processing-agent-skill。
                 必须严格按照 skill 中“运行流程”的步骤和分支调用工具。
-                当前测试范围只允许推进到 USER_CONFIRMATION_REQUIRED 或 USER_CONFIRMED：
-                - 如果需要用户确认，保存状态并返回 USER_CONFIRMATION_REQUIRED。
-                - 如果不需要用户确认，保存状态并返回 USER_CONFIRMED。
-                - 不要调用临时表、SQL 片段、SQL 拼接或写库工具。
+                如果需要用户确认，保存状态并返回 USER_CONFIRMATION_REQUIRED。
+                如果用户确认已完成或无需用户确认，继续按照 skill 完成后续数据加工流程。
 
                 最终必须只输出 DataProcessingAgentResponse JSON，不能输出 Markdown 或解释文字。
 
@@ -135,5 +148,43 @@ public class DataProcessingReactAgentService {
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("序列化 Agent 输入失败。", ex);
         }
+    }
+
+    private boolean isMissingAssistantMessageError(Throwable ex) {
+        Throwable current = ex;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null
+                    && (message.contains("No AssitantMessage found")
+                    || message.contains("No AssistantMessage found"))) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private DataProcessingAgentResponse toResponse(DataProcessingAgentState state) {
+        return new DataProcessingAgentResponse(
+                state.stage(),
+                state.taskId(),
+                state.parsedFileRef(),
+                state.templateRecognitionResult(),
+                state.confirmationItems(),
+                state.userConfirmationResult(),
+                state.summary(),
+                state.stage() == AgentWorkflowStage.FAILED ? "AGENT_TASK_FAILED" : "",
+                responseMessage(state)
+        );
+    }
+
+    private String responseMessage(DataProcessingAgentState state) {
+        return switch (state.stage()) {
+            case USER_CONFIRMATION_REQUIRED -> "等待用户确认。";
+            case USER_CONFIRMED -> "用户确认阶段已完成。";
+            case FAILED -> "任务失败。";
+            case COMPLETED -> "任务已完成。";
+            default -> "任务阶段: " + state.stage();
+        };
     }
 }

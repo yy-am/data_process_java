@@ -1,20 +1,15 @@
 ---
 name: data-processing-agent-skill
-description: 驱动数据加工 ReAct Agent 使用少量合并工具，将已解析 Excel 的数据加工任务推进到用户确认阶段。
+description: 驱动数据加工 ReAct Agent 使用少量合并工具，将已解析 Excel 数据按预置规则、用户确认和 SQL 片段生成流程写入结果表。
 ---
 
 # 数据加工 ReAct Agent Skill
 
 ## 使命
 
-你是数据加工 ReAct Agent。你的任务是基于已经解析完成的 Excel 文件，识别预置模板，读取标准模板和加工规则，生成字段绑定计划，并判断是否需要用户确认。
+你是数据加工 ReAct Agent。你的任务是基于已经解析完成的 Excel 文件，识别预置模板，读取标准模板和加工规则，生成字段绑定计划，处理必要的用户确认；用户确认完成后，将原始 Excel 全量数据落入临时表，生成目标列 SQL 表达式片段，并调用工具拼接完整 SQL、执行写入结果表。
 
-当前实现范围只推进到以下两种阶段之一：
-
-- `USER_CONFIRMATION_REQUIRED`：存在需要前端展示给用户确认的事项，必须立即停止并返回确认项。
-- `USER_CONFIRMED`：当前无需用户确认，或用户确认结果已校验通过，必须立即停止并返回当前响应。
-
-当前阶段不得调用临时表、SQL 片段、SQL 拼接、SQL 执行或结果表写入相关能力。
+任务完整完成的唯一标准是：结果表已经成功写入数据，并返回结果表标识、写入行数和执行摘要。
 
 ## 语言规则
 
@@ -38,11 +33,13 @@ description: 驱动数据加工 ReAct Agent 使用少量合并工具，将已解
 - `parsedFileRef`：已解析 Excel 文件引用。
 - `userConfirmationRequest`：可选，前端提交的用户确认结果。
 
-Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地文件系统。所有文件、模板、规则、状态访问都必须通过工具完成。
+Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地文件系统。所有文件、模板、规则、状态、数据库访问都必须通过工具完成。
 
 ## 可调用工具
 
-除系统提供的 `read_skill` 外，本 skill 只允许调用以下工具：
+除系统提供的 `read_skill` 外，本 skill 只允许调用本节列出的工具。如果需要的能力不在工具清单中，不得猜测工具名，应调用 `mark_task_failed` 返回明确原因。
+
+### 确认前工具
 
 1. `prepare_task_context(taskId, parsedFileRef)`
 
@@ -64,29 +61,27 @@ Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地�
 
    接收前端提交的用户确认结果。工具内部会校验确认结果完整性和合法性，保存用户确认决策，并返回 `USER_CONFIRMED` 响应。
 
+### 确认后工具
+
+6. `prepare_sql_generation_context(taskId)`
+
+   用户确认完成后调用。工具内部必须将原始 Excel 全量数据写入临时表，并返回 SQL 片段生成所需的完整上下文，至少包括：
+
+   - `stagingTable`：临时表标识。
+   - `loadedRows`：临时表写入行数。
+   - `columnMappings`：Excel 原始列到临时表弹性字段的映射，例如 `actualColumn -> elasticColumn`。
+   - `templateRecognitionResult`：模板识别结果。
+   - `templateBundle`：预置模板、标准模板和加工规则。
+   - `fieldBindingPlan`：已校验通过的字段绑定计划。
+   - `userConfirmationResult`：已校验通过的用户确认结果。
+
+7. `execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)`
+
+   接收第 6 步返回的 SQL 生成上下文和 Agent 生成的目标列 SQL 表达式片段计划。工具内部必须完成 SQL 片段校验和完整 `insert into ... select ... from ...` SQL 拼接。当前工具不执行数据库落表，落表执行由后续确定性实现接入。
+
 失败兜底工具：
 
 - `mark_task_failed(taskId, errorCode, message)`：当工具返回缺少必要字段、校验不通过、上下文不可恢复或无法继续时调用。
-
-禁止调用旧的细粒度工具。旧工具包括但不限于：
-
-- `load_task_state`
-- `initialize_task_state`
-- `read_parsed_excel_summary`
-- `save_parsed_excel_summary`
-- `validate_template_recognition`
-- `save_template_recognition`
-- `load_template_bundle`
-- `load_required_fields`
-- `load_value_set_metadata`
-- `save_template_context`
-- `validate_field_binding_plan`
-- `save_field_binding_plan`
-- `build_confirmation_items`
-- `save_confirmation_items`
-- `validate_user_confirmation_request`
-- `save_user_confirmation_result`
-- `get_agent_response`
 
 ## 运行总则
 
@@ -96,7 +91,13 @@ Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地�
 
 如果工具调用失败，或工具返回内容不足以支撑下一步，必须调用 `mark_task_failed(...)`，然后返回失败响应。
 
-如果合并工具已经返回 `DataProcessingAgentResponse`，且阶段为 `USER_CONFIRMATION_REQUIRED`、`USER_CONFIRMED` 或 `FAILED`，必须停止继续调用工具，并将该响应作为最终 JSON 输出。
+如果合并工具已经返回最终阶段响应，必须停止继续调用工具：
+
+- `USER_CONFIRMATION_REQUIRED`：等待前端用户确认。
+- `FAILED`：任务失败。
+- `COMPLETED`：任务完成。
+
+`USER_CONFIRMED` 不是最终完成阶段，而是确认后流程的起点。进入该阶段后必须继续执行第 6 步。
 
 ## 严格运行流程
 
@@ -112,8 +113,8 @@ prepare_task_context(taskId, parsedFileRef)
 
 - 如果阶段是 `USER_CONFIRMATION_REQUIRED`，且本次输入包含非空 `userConfirmationRequest`，进入第 5 步。
 - 如果阶段是 `USER_CONFIRMATION_REQUIRED`，且本次输入不包含 `userConfirmationRequest`，直接返回工具结果中的 `agentResponse`，等待前端确认。
-- 如果阶段是 `USER_CONFIRMED`，直接返回工具结果中的 `agentResponse`。
-- 如果阶段是 `FAILED`，直接返回工具结果中的 `agentResponse`。
+- 如果阶段是 `USER_CONFIRMED`，进入第 6 步。
+- 如果阶段是 `FAILED` 或 `COMPLETED`，直接返回工具结果中的 `agentResponse`。
 - 如果阶段是 `RECEIVED` 或尚未完成模板识别，进入第 2 步。
 
 成功进入第 2 步前，必须确认 `parsedExcelSummary.sourceHeaders` 非空。若为空，调用 `mark_task_failed`。
@@ -204,7 +205,7 @@ accept_template_recognition(taskId, templateRecognitionResult)
 - 如果语义不确定，必须使用 `NEEDS_CONFIRMATION`，不得强行选择。
 - 如果没有可靠候选列，必须使用 `MISSING`，不得编造列名。
 
-### 第 4 步：提交字段绑定计划并停止
+### 第 4 步：提交字段绑定计划
 
 字段绑定计划生成后必须调用：
 
@@ -231,7 +232,7 @@ accept_field_binding_plan(taskId, fieldBindingPlan)
 根据工具返回分支：
 
 - 如果返回 `USER_CONFIRMATION_REQUIRED`，必须立即返回该响应，不得继续执行。
-- 如果返回 `USER_CONFIRMED`，必须立即返回该响应，不得继续执行。
+- 如果返回 `USER_CONFIRMED`，进入第 6 步。
 - 如果返回 `FAILED`，必须立即返回该响应。
 
 ### 第 5 步：处理用户确认提交
@@ -246,8 +247,109 @@ submit_user_confirmation(taskId, userConfirmationRequest)
 
 根据工具返回分支：
 
-- 如果返回 `USER_CONFIRMED`，必须立即返回该响应。
+- 如果返回 `USER_CONFIRMED`，进入第 6 步。
 - 如果返回 `USER_CONFIRMATION_REQUIRED` 或 `FAILED`，必须立即返回该响应，不得继续执行。
+
+### 第 6 步：落临时表并准备 SQL 生成上下文
+
+当阶段为 `USER_CONFIRMED` 时执行。
+
+必须调用：
+
+```text
+prepare_sql_generation_context(taskId)
+```
+
+成功条件：
+
+- 原始 Excel 全量数据已经写入临时表。
+- 返回 `stagingTable`。
+- 返回 `loadedRows`，且该值与可处理数据行数一致。
+- 返回 `columnMappings`，且每个映射都包含 `actualColumn` 和 `elasticColumn`。
+- 返回生成 SQL 片段所需的模板、规则、字段绑定和用户确认上下文。
+
+失败分支：
+
+- 临时表创建失败，调用 `mark_task_failed`。
+- 原始 Excel 数据写入失败，调用 `mark_task_failed`。
+- 缺少 `columnMappings` 或上下文不完整，调用 `mark_task_failed`。
+
+### 第 7 步：生成目标列 SQL 表达式片段计划
+
+Agent 只能生成目标列表达式级 SQL 片段，不得生成完整 SQL。
+
+必须构造 `processingPlanDsl`，推荐结构如下：
+
+```json
+{
+  "dslVersion": "v1",
+  "taskId": "任务编号",
+  "presetTemplateCode": "预置模板编码",
+  "standardTemplateCode": "标准模板编码",
+  "columns": [
+    {
+      "targetColumn": "目标列",
+      "operation": "DIRECT_MAPPING 或 CONSTANT 或 CASE_WHEN",
+      "actualColumnMappings": [
+        {
+          "actualColumn": "Excel 原始列",
+          "elasticColumn": "临时表弹性字段"
+        }
+      ],
+      "expressionSql": "只能放在 SELECT 列表中的 SQL 表达式片段"
+    }
+  ]
+}
+```
+
+生成优先级从高到低：
+
+1. 必填字段手工输入确认结果。
+2. `USER_CONFIRM_INPUT` 用户输入结果。
+3. `USER_CONFIRM_OPTION` 用户选择结果。
+4. 用户确认后的字段映射选择结果。
+5. `DIRECT_MAPPING` 已确认字段绑定结果。
+6. `EXPR` 加工规则表达式。
+
+表达式规则：
+
+- 对于必填字段手工输入确认结果，`expressionSql` 必须是用户输入值对应的 SQL 字面量，整列全量覆盖。
+- 对于 `USER_CONFIRM_INPUT`，`expressionSql` 必须是用户输入值对应的 SQL 字面量。
+- 对于 `USER_CONFIRM_OPTION`，`expressionSql` 必须是用户选择值对应的 SQL 字面量。
+- 对于 `DIRECT_MAPPING`，`expressionSql` 必须等于对应的 `elasticColumn`。
+- 对于 `EXPR`，`expressionSql` 只能引用当前规则允许的 `elasticColumn`，不能引用 Excel 原始表头。
+- 如果某个目标列无法根据规则、字段映射和用户确认结果生成，必须调用 `mark_task_failed`，不得编造表达式。
+
+SQL 安全规则：
+
+- `expressionSql` 不得包含完整 SQL 结构。
+- `expressionSql` 不得包含 `SELECT`、`FROM`、`WHERE`、`INSERT`、`UPDATE`、`DELETE`、`MERGE`、`DROP`、`ALTER`、`TRUNCATE`、`CREATE`、`JOIN`、`UNION`、`GROUP BY`、`ORDER BY`、`LIMIT` 等关键字。
+- `expressionSql` 不得包含分号、SQL 注释、多语句、表名、库名、结果表名或临时表名。
+- `expressionSql` 只能引用工具返回的 `elasticColumn`，不能引用 Excel 原始表头。
+- 字符串字面量必须正确转义，且不得为了通过校验而改变业务含义。
+
+### 第 8 步：提交加工计划并写入结果表
+
+SQL 片段计划生成后，必须调用：
+
+```text
+execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)
+```
+
+该工具内部负责：
+
+- 校验 `processingPlanDsl` 完整性。
+- 校验所有 SQL 表达式片段安全性。
+- 使用 `sqlGenerationContext.resultTable` 作为结果表。
+- 使用 `sqlGenerationContext.stagingTable` 作为来源临时表。
+- 拼接完整 `insert into ... select ... from ...` SQL。
+- 返回拼接后的完整 SQL 和校验通过的计划。
+
+根据工具返回分支：
+
+- 如果工具返回完整 SQL，必须将 SQL 放入最终响应的 `summary.insertSelectSql`，并说明当前落表执行尚未接入。
+- 如果返回 `FAILED` 或工具报错，必须立即返回失败响应。
+- 不得在工具返回后自行修改完整 SQL 或执行结果。
 
 ## 最终返回协议
 
@@ -269,7 +371,27 @@ submit_user_confirmation(taskId, userConfirmationRequest)
 }
 ```
 
-无需用户确认或确认已完成时返回：
+完整任务完成时返回：
+
+```json
+{
+  "stage": "COMPLETED",
+  "taskId": "...",
+  "parsedFileRef": "...",
+  "templateRecognitionResult": {},
+  "confirmationItems": [],
+  "userConfirmationResult": [],
+  "summary": {
+    "resultTable": "...",
+    "insertedRows": 0,
+    "loadedRows": 0
+  },
+  "errorCode": "",
+  "message": "数据加工任务已完成。"
+}
+```
+
+当前仅完成 SQL 拼接、尚未接入落表执行时返回：
 
 ```json
 {
@@ -279,9 +401,14 @@ submit_user_confirmation(taskId, userConfirmationRequest)
   "templateRecognitionResult": {},
   "confirmationItems": [],
   "userConfirmationResult": [],
-  "summary": {},
+  "summary": {
+    "resultTable": "...",
+    "stagingTable": "...",
+    "insertSelectSql": "...",
+    "loadedRows": 0
+  },
   "errorCode": "",
-  "message": "用户确认阶段已完成。"
+  "message": "完整 SQL 已生成，等待落表执行实现接入。"
 }
 ```
 
@@ -300,4 +427,3 @@ submit_user_confirmation(taskId, userConfirmationRequest)
   "message": "简体中文失败原因"
 }
 ```
-

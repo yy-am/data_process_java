@@ -2,15 +2,18 @@ package com.example.dataprocess.agent.tool;
 
 import com.example.dataprocess.agent.model.AgentConfirmationDecision;
 import com.example.dataprocess.agent.model.AgentConfirmationItem;
+import com.example.dataprocess.agent.model.AgentSqlGenerationContext;
 import com.example.dataprocess.agent.model.AgentUserConfirmationRequest;
 import com.example.dataprocess.agent.model.AgentWorkflowStage;
 import com.example.dataprocess.agent.model.DataProcessingAgentResponse;
 import com.example.dataprocess.agent.model.DataProcessingAgentState;
 import com.example.dataprocess.agent.model.FieldBindingPlan;
 import com.example.dataprocess.agent.model.ParsedExcelSummary;
+import com.example.dataprocess.agent.model.RenderedProcessingSql;
 import com.example.dataprocess.agent.model.StandardRequiredFields;
 import com.example.dataprocess.agent.model.TemplateBundle;
 import com.example.dataprocess.agent.model.ValueSetMetadata;
+import com.example.dataprocess.domain.model.ProcessingPlanDsl;
 import com.example.dataprocess.domain.model.ProcessingRule;
 import com.example.dataprocess.domain.model.TemplateRecognitionResult;
 import org.springframework.ai.tool.annotation.Tool;
@@ -39,6 +42,7 @@ public class DataProcessingAgentToolMethods {
     private final ValueSetTool valueSetTool;
     private final FieldBindingValidationTool fieldBindingValidationTool;
     private final ConfirmationTool confirmationTool;
+    private final ProcessingPlanSqlTool processingPlanSqlTool;
 
     public DataProcessingAgentToolMethods(
             AgentStateTool stateTool,
@@ -47,7 +51,8 @@ public class DataProcessingAgentToolMethods {
             RequiredFieldTool requiredFieldTool,
             ValueSetTool valueSetTool,
             FieldBindingValidationTool fieldBindingValidationTool,
-            ConfirmationTool confirmationTool
+            ConfirmationTool confirmationTool,
+            ProcessingPlanSqlTool processingPlanSqlTool
     ) {
         this.stateTool = stateTool;
         this.parsedExcelFileTool = parsedExcelFileTool;
@@ -56,6 +61,7 @@ public class DataProcessingAgentToolMethods {
         this.valueSetTool = valueSetTool;
         this.fieldBindingValidationTool = fieldBindingValidationTool;
         this.confirmationTool = confirmationTool;
+        this.processingPlanSqlTool = processingPlanSqlTool;
     }
 
     /**
@@ -170,6 +176,19 @@ public class DataProcessingAgentToolMethods {
                 .withStage(AgentWorkflowStage.USER_CONFIRMED)
                 .addTrace("用户确认结果校验通过。"));
         return toResponse(savedState);
+    }
+
+    /**
+     * 新增暴露给模型的合并工具：校验 Agent 生成的 SQL 片段计划，并拼接完整 INSERT ... SELECT SQL。
+     * 当前实现只负责 SQL 校验和拼接，不执行数据库落表。
+     */
+    @Tool(name = "execute_processing_plan", description = "校验加工计划 SQL 片段并拼接完整 INSERT SELECT SQL；当前不执行数据库落表。")
+    public RenderedProcessingSql executeProcessingPlan(
+            @ToolParam(description = "任务编号") String taskId,
+            @ToolParam(description = "prepare_sql_generation_context 工具返回的 SQL 生成上下文") AgentSqlGenerationContext sqlGenerationContext,
+            @ToolParam(description = "Agent 生成的目标列 SQL 表达式片段计划") ProcessingPlanDsl processingPlanDsl
+    ) {
+        return processingPlanSqlTool.renderInsertSelectSql(taskId, sqlGenerationContext, processingPlanDsl);
     }
 
     /**
@@ -371,7 +390,7 @@ public class DataProcessingAgentToolMethods {
             case RECEIVED -> "请调用 load_template_catalog，并基于模板目录和 Excel 摘要识别模板。";
             case TEMPLATE_RECOGNIZED -> "请基于已加载的模板上下文生成 FieldBindingPlan，然后调用 accept_field_binding_plan。";
             case USER_CONFIRMATION_REQUIRED -> "请直接返回 agentResponse，等待前端提交用户确认结果。";
-            case USER_CONFIRMED -> "当前测试范围已到用户确认完成，请直接返回 agentResponse。";
+            case USER_CONFIRMED -> "请调用 prepare_sql_generation_context 准备 SQL 生成上下文。";
             case FAILED -> "任务已失败，请直接返回 agentResponse。";
             case COMPLETED -> "任务已完成，请直接返回 agentResponse。";
             default -> "请按照 skill 中定义的下一步继续执行。";
