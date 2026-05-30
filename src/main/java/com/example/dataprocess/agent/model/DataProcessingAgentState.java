@@ -24,6 +24,7 @@ public record DataProcessingAgentState(
         List<AgentConfirmationItem> confirmationItems,
         List<AgentConfirmationDecision> userConfirmationResult,
         RenderedProcessingSql renderedProcessingSql,
+        String exportedExcelDocId,
         List<String> traceLogs,
         List<String> errorMessages
 ) {
@@ -42,6 +43,7 @@ public record DataProcessingAgentState(
                 List.of(),
                 List.of(),
                 null,
+                null,
                 new ArrayList<>(),
                 new ArrayList<>()
         );
@@ -50,19 +52,19 @@ public record DataProcessingAgentState(
     public DataProcessingAgentState withStage(AgentWorkflowStage newStage) {
         return copy(newStage, parsedExcelSummary, templateRecognitionResult, templateBundle, requiredFields,
                 valueSetMetadata, fieldBindingPlan, confirmationItems, userConfirmationResult,
-                renderedProcessingSql, traceLogs, errorMessages);
+                renderedProcessingSql, exportedExcelDocId, traceLogs, errorMessages);
     }
 
     public DataProcessingAgentState withParsedExcelSummary(ParsedExcelSummary value) {
         return copy(stage, value, templateRecognitionResult, templateBundle, requiredFields,
                 valueSetMetadata, fieldBindingPlan, confirmationItems, userConfirmationResult,
-                renderedProcessingSql, traceLogs, errorMessages);
+                renderedProcessingSql, exportedExcelDocId, traceLogs, errorMessages);
     }
 
     public DataProcessingAgentState withTemplateRecognitionResult(TemplateRecognitionResult value) {
         return copy(stage, parsedExcelSummary, value, templateBundle, requiredFields,
                 valueSetMetadata, fieldBindingPlan, confirmationItems, userConfirmationResult,
-                renderedProcessingSql, traceLogs, errorMessages);
+                renderedProcessingSql, exportedExcelDocId, traceLogs, errorMessages);
     }
 
     public DataProcessingAgentState withTemplateContext(
@@ -72,31 +74,37 @@ public record DataProcessingAgentState(
     ) {
         return copy(stage, parsedExcelSummary, templateRecognitionResult, newTemplateBundle, newRequiredFields,
                 List.copyOf(newValueSetMetadata), fieldBindingPlan, confirmationItems, userConfirmationResult,
-                renderedProcessingSql, traceLogs, errorMessages);
+                renderedProcessingSql, exportedExcelDocId, traceLogs, errorMessages);
     }
 
     public DataProcessingAgentState withFieldBindingPlan(FieldBindingPlan value) {
         return copy(stage, parsedExcelSummary, templateRecognitionResult, templateBundle, requiredFields,
                 valueSetMetadata, value, confirmationItems, userConfirmationResult,
-                renderedProcessingSql, traceLogs, errorMessages);
+                renderedProcessingSql, exportedExcelDocId, traceLogs, errorMessages);
     }
 
     public DataProcessingAgentState withConfirmationItems(List<AgentConfirmationItem> value) {
         return copy(stage, parsedExcelSummary, templateRecognitionResult, templateBundle, requiredFields,
                 valueSetMetadata, fieldBindingPlan, List.copyOf(value), userConfirmationResult,
-                renderedProcessingSql, traceLogs, errorMessages);
+                renderedProcessingSql, exportedExcelDocId, traceLogs, errorMessages);
     }
 
     public DataProcessingAgentState withUserConfirmationResult(List<AgentConfirmationDecision> value) {
         return copy(stage, parsedExcelSummary, templateRecognitionResult, templateBundle, requiredFields,
                 valueSetMetadata, fieldBindingPlan, confirmationItems, List.copyOf(value),
-                renderedProcessingSql, traceLogs, errorMessages);
+                renderedProcessingSql, exportedExcelDocId, traceLogs, errorMessages);
     }
 
     public DataProcessingAgentState withRenderedProcessingSql(RenderedProcessingSql value) {
         return copy(stage, parsedExcelSummary, templateRecognitionResult, templateBundle, requiredFields,
                 valueSetMetadata, fieldBindingPlan, confirmationItems, userConfirmationResult,
-                value, traceLogs, errorMessages);
+                value, exportedExcelDocId, traceLogs, errorMessages);
+    }
+
+    public DataProcessingAgentState withExportedExcelDocId(String value) {
+        return copy(stage, parsedExcelSummary, templateRecognitionResult, templateBundle, requiredFields,
+                valueSetMetadata, fieldBindingPlan, confirmationItems, userConfirmationResult,
+                renderedProcessingSql, value, traceLogs, errorMessages);
     }
 
     public DataProcessingAgentState addTrace(String message) {
@@ -104,7 +112,7 @@ public record DataProcessingAgentState(
         newTraceLogs.add(message);
         return copy(stage, parsedExcelSummary, templateRecognitionResult, templateBundle, requiredFields,
                 valueSetMetadata, fieldBindingPlan, confirmationItems, userConfirmationResult,
-                renderedProcessingSql, newTraceLogs, errorMessages);
+                renderedProcessingSql, exportedExcelDocId, newTraceLogs, errorMessages);
     }
 
     public DataProcessingAgentState addError(String message) {
@@ -112,7 +120,7 @@ public record DataProcessingAgentState(
         newErrorMessages.add(message);
         return copy(stage, parsedExcelSummary, templateRecognitionResult, templateBundle, requiredFields,
                 valueSetMetadata, fieldBindingPlan, confirmationItems, userConfirmationResult,
-                renderedProcessingSql, traceLogs, newErrorMessages);
+                renderedProcessingSql, exportedExcelDocId, traceLogs, newErrorMessages);
     }
 
     public Map<String, Object> summary() {
@@ -125,6 +133,9 @@ public record DataProcessingAgentState(
             result.put("targetColumns", renderedProcessingSql.targetColumns());
             result.put("insertSelectSql", renderedProcessingSql.insertSelectSql());
             result.put("loadedRows", renderedProcessingSql.loadedRows());
+        }
+        if (exportedExcelDocId != null && !exportedExcelDocId.isBlank()) {
+            result.put("excelDocId", exportedExcelDocId);
         }
         return Collections.unmodifiableMap(result);
     }
@@ -140,6 +151,7 @@ public record DataProcessingAgentState(
             List<AgentConfirmationItem> newConfirmationItems,
             List<AgentConfirmationDecision> newUserConfirmationResult,
             RenderedProcessingSql newRenderedProcessingSql,
+            String newExportedExcelDocId,
             List<String> newTraceLogs,
             List<String> newErrorMessages
     ) {
@@ -156,6 +168,7 @@ public record DataProcessingAgentState(
                 safeList(newConfirmationItems),
                 safeList(newUserConfirmationResult),
                 newRenderedProcessingSql,
+                newExportedExcelDocId,
                 safeList(newTraceLogs),
                 safeList(newErrorMessages)
         );

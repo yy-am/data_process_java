@@ -457,7 +457,7 @@ public class DataProcessingReactAgentService {
             case POST_CONFIRMATION_CONTEXT_READY -> "确认后的加工上下文已准备完成。";
             case SQL_GENERATION_CONTEXT_READY -> "SQL 生成上下文已准备完成。";
             case PROCESSING_SQL_RENDERED -> "完整 SQL 已生成，等待落表执行实现接入。";
-            case RESULT_TABLE_WRITTEN -> "结果表已写入。";
+            case RESULT_TABLE_WRITTEN -> "结果表已写入，等待导出 Excel。";
             case FAILED -> "任务失败。";
             case COMPLETED -> "任务已完成。";
         };

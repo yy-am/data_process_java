@@ -1,15 +1,15 @@
 ---
 name: data-processing-agent-skill
-description: 驱动数据加工 ReAct Agent 使用少量合并工具，将已解析 Excel 数据按预置规则、用户确认和 SQL 片段生成流程写入结果表。
+description: 驱动数据加工 ReAct Agent 使用少量合并工具，将已解析 Excel 数据按预置规则和用户确认加工写入结果表，并导出新的 Excel 文件。
 ---
 
 # 数据加工 ReAct Agent Skill
 
 ## 使命
 
-你是数据加工 ReAct Agent。你的任务是基于已经解析完成的 Excel 文件，识别预置模板，读取标准模板和加工规则，生成字段绑定计划，处理必要的用户确认；用户确认完成后，将原始 Excel 全量数据落入临时表，生成目标列 SQL 表达式片段，并调用工具拼接完整 SQL、执行写入结果表。
+你是数据加工 ReAct Agent。你的任务是基于已经解析完成的 Excel 文件，识别预置模板，读取标准模板和加工规则，生成字段绑定计划，处理必要的用户确认；用户确认完成后，将原始 Excel 全量数据落入临时表，生成目标列 SQL 表达式片段，并调用工具拼接完整 SQL、执行写入结果表；结果表写入完成后，必须调用工具基于结果表导出新的 Excel 文件。
 
-任务完整完成的唯一标准是：结果表已经成功写入数据，并返回结果表标识、写入行数和执行摘要。
+任务完整完成的唯一标准是：结果表已经成功写入数据，新的 Excel 文件已经导出成功，并返回新 Excel 文件的 `excelDocId`、结果表标识、写入行数和执行摘要。
 
 ## 语言规则
 
@@ -109,6 +109,15 @@ Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地�
 
    接收 `prepare_sql_generation_context` 返回的 SQL 表上下文和 Agent 生成的目标列 SQL 表达式片段计划。工具内部必须基于 `taskId` 从任务状态读取业务加工上下文，完成 DSL 校验、SQL 片段安全校验和完整 `insert into ... select ... from ...` SQL 拼接。当前工具不执行数据库落表，落表执行由后续确定性实现接入。
 
+9. `export_processed_excel(taskId, resultTable)`
+
+   仅当最终结果表已经写入完成后调用。工具内部基于最终结果表导出新的 Excel 文件，并返回新 Excel 文件的 `docId`，返回类型是字符串。
+
+   入参含义：
+
+   - `taskId`：任务编号。
+   - `resultTable`：最终结果表名，必须来自任务状态或前序工具返回，不得由 Agent 编造。
+
 失败兜底工具：
 
 - `mark_task_failed(taskId, errorCode, message)`：当工具返回缺少必要字段、校验不通过、上下文不可恢复或无法继续时调用。
@@ -124,7 +133,7 @@ Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地�
 如果合并工具已经返回最终阶段响应，必须停止继续调用工具：
 
 - `USER_CONFIRMATION_REQUIRED`：等待前端用户确认。
-- `PROCESSING_SQL_RENDERED`：完整 SQL 已生成，等待落表执行实现接入。
+- `PROCESSING_SQL_RENDERED`：完整 SQL 已生成，但结果表尚未确认写入；当前运行只能返回中间响应，不得伪造结果表写入或导出结果。
 - `FAILED`：任务失败。
 - `COMPLETED`：任务完成。
 
@@ -142,8 +151,8 @@ Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地�
 - `POST_CONFIRMATION_CONTEXT_READY`：确认后的加工上下文已校验通过，可以调用工具准备 SQL 生成上下文。
 - `SQL_GENERATION_CONTEXT_READY`：临时表和 SQL 生成上下文已准备完成。
 - `PROCESSING_SQL_RENDERED`：完整 `INSERT SELECT` SQL 已拼接完成，但尚未执行落表。
-- `RESULT_TABLE_WRITTEN`：结果表写入已执行。
-- `COMPLETED`：任务完整完成。
+- `RESULT_TABLE_WRITTEN`：结果表写入已执行，可以导出新的 Excel 文件。
+- `COMPLETED`：新的 Excel 文件已导出，任务完整完成。
 - `FAILED`：任务失败。
 
 ## 严格运行流程
@@ -163,7 +172,9 @@ prepare_task_context(taskId, parsedFileRef)
 - 如果阶段是 `USER_CONFIRMED`，进入第 6 步。
 - 如果阶段是 `POST_CONFIRMATION_CONTEXT_READY`，进入第 7 步。
 - 如果阶段是 `SQL_GENERATION_CONTEXT_READY`，进入第 8 步。
-- 如果阶段是 `PROCESSING_SQL_RENDERED`、`RESULT_TABLE_WRITTEN`、`FAILED` 或 `COMPLETED`，直接返回工具结果中的 `agentResponse`。
+- 如果阶段是 `PROCESSING_SQL_RENDERED`，直接返回工具结果中的 `agentResponse`，不得伪造结果表写入或导出结果。
+- 如果阶段是 `RESULT_TABLE_WRITTEN`，进入第 10 步。
+- 如果阶段是 `FAILED` 或 `COMPLETED`，直接返回工具结果中的 `agentResponse`。
 - 如果阶段是 `RECEIVED`、`TASK_CONTEXT_READY` 或尚未完成模板识别，进入第 2 步。
 - 如果阶段是 `TEMPLATE_CONTEXT_READY`、`FIELD_BINDING_PLAN_READY` 或 `CONFIRMATION_ANALYZED`，进入第 3 步或第 4 步中尚未完成的步骤。
 
@@ -428,9 +439,36 @@ execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)
 
 根据工具返回分支：
 
-- 如果工具返回完整 SQL，最终响应阶段必须使用 `PROCESSING_SQL_RENDERED`，必须将 SQL 放入最终响应的 `summary.insertSelectSql`，并说明当前落表执行尚未接入。
+- 如果工具返回 `RESULT_TABLE_WRITTEN` 或返回内容能够明确证明结果表已写入，并且存在最终 `resultTable`，进入第 10 步。
+- 如果工具仅返回完整 SQL，响应阶段必须使用 `PROCESSING_SQL_RENDERED`，必须将 SQL 放入响应的 `summary.insertSelectSql`，并说明当前结果表写入尚未完成；此时不得进入第 10 步。
 - 如果返回 `FAILED` 或工具报错，必须立即返回失败响应。
 - 不得在工具返回后自行修改完整 SQL 或执行结果。
+
+### 第 10 步：基于结果表导出新的 Excel 文件
+
+仅当结果表已经写入完成，且当前阶段为 `RESULT_TABLE_WRITTEN` 时执行。
+
+必须先从任务状态或第 9 步工具返回中取得最终结果表名：
+
+- 优先使用任务状态 `summary.resultTable`。
+- 如果任务状态中没有，但第 9 步工具返回了明确的 `resultTable`，可以使用该值。
+- 不得由 Agent 猜测、拼接或编造结果表名。
+
+取得最终结果表名后，必须调用：
+
+```text
+export_processed_excel(taskId, resultTable)
+```
+
+成功条件：
+
+- 工具返回非空字符串。
+- 该字符串即新导出的 Excel 文件 `excelDocId`。
+
+根据工具返回分支：
+
+- 如果工具返回非空 `excelDocId`，最终响应阶段必须使用 `COMPLETED`，并将 `excelDocId`、`resultTable` 和写入摘要放入 `summary`。
+- 如果工具返回空字符串、`null` 或工具报错，必须调用 `mark_task_failed`，不得返回 `COMPLETED`。
 
 ## 最终返回协议
 
@@ -464,6 +502,7 @@ execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)
   "userConfirmationResult": [],
   "summary": {
     "resultTable": "...",
+    "excelDocId": "...",
     "insertedRows": 0,
     "loadedRows": 0
   },
@@ -472,7 +511,27 @@ execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)
 }
 ```
 
-当前仅完成 SQL 拼接、尚未接入落表执行时返回：
+结果表已写入、但尚未完成 Excel 导出时返回：
+
+```json
+{
+  "stage": "RESULT_TABLE_WRITTEN",
+  "taskId": "...",
+  "parsedFileRef": "...",
+  "templateRecognitionResult": {},
+  "confirmationItems": [],
+  "userConfirmationResult": [],
+  "summary": {
+    "resultTable": "...",
+    "insertedRows": 0,
+    "loadedRows": 0
+  },
+  "errorCode": "",
+  "message": "结果表已写入，等待导出 Excel。"
+}
+```
+
+当前仅完成 SQL 拼接、尚未完成结果表写入时返回：
 
 ```json
 {

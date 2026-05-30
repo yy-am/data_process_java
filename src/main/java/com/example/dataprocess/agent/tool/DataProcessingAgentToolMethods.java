@@ -246,6 +246,18 @@ public class DataProcessingAgentToolMethods {
     }
 
     /**
+     * 新增暴露给模型的预留工具：基于最终结果表导出新的 Excel 文件，并返回新 Excel 文件 docId。
+     * 当前仅声明 Agent 可调用的工具契约，具体导出实现由业务代码后续接入。
+     */
+    @Tool(name = "export_processed_excel", description = "基于最终结果表导出新的 Excel 文件，返回新 Excel 文件 docId。")
+    public String exportProcessedExcel(
+            @ToolParam(description = "任务编号") String taskId,
+            @ToolParam(description = "最终结果表名，可从任务状态的 summary.resultTable 获取") String resultTable
+    ) {
+        return null;
+    }
+
+    /**
      * 暴露给模型的失败兜底工具：将当前任务标记为失败并返回标准 Agent 响应。
      */
     @Tool(name = "mark_task_failed", description = "使用错误编码和错误信息将当前任务标记为失败，并返回标准 Agent 响应。")
@@ -655,8 +667,8 @@ public class DataProcessingAgentToolMethods {
             case USER_CONFIRMED -> "请调用 prepare_post_confirmation_context 校验并准备确认后的加工上下文。";
             case POST_CONFIRMATION_CONTEXT_READY -> "请调用 prepare_sql_generation_context 准备 SQL 生成上下文。";
             case SQL_GENERATION_CONTEXT_READY -> "请生成 ProcessingPlanDsl，然后调用 execute_processing_plan。";
-            case PROCESSING_SQL_RENDERED -> "完整 SQL 已生成，请直接返回 agentResponse 或最终 SQL 生成结果。";
-            case RESULT_TABLE_WRITTEN -> "结果表写入已完成，请返回完成响应。";
+            case PROCESSING_SQL_RENDERED -> "完整 SQL 已生成，请等待结果表写入实现接入，或返回当前 SQL 生成结果。";
+            case RESULT_TABLE_WRITTEN -> "结果表写入已完成，请调用 export_processed_excel 导出新的 Excel 文件。";
             case FAILED -> "任务已失败，请直接返回 agentResponse。";
             case COMPLETED -> "任务已完成，请直接返回 agentResponse。";
         };
@@ -703,7 +715,7 @@ public class DataProcessingAgentToolMethods {
             case POST_CONFIRMATION_CONTEXT_READY -> "确认后的加工上下文已准备完成。";
             case SQL_GENERATION_CONTEXT_READY -> "SQL 生成上下文已准备完成。";
             case PROCESSING_SQL_RENDERED -> "完整 SQL 已生成，等待落表执行实现接入。";
-            case RESULT_TABLE_WRITTEN -> "结果表已写入。";
+            case RESULT_TABLE_WRITTEN -> "结果表已写入，等待导出 Excel。";
             case FAILED -> "任务失败。";
             case COMPLETED -> "任务已完成。";
         };
