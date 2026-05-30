@@ -2,6 +2,7 @@ package com.example.dataprocess.agent.tool;
 
 import com.example.dataprocess.agent.model.AgentSqlGenerationContext;
 import com.example.dataprocess.agent.model.RenderedProcessingSql;
+import com.example.dataprocess.domain.model.DslGenerationContext;
 import com.example.dataprocess.domain.model.ProcessingPlanColumn;
 import com.example.dataprocess.domain.model.ProcessingPlanDsl;
 import com.example.dataprocess.infrastructure.service.ProcessingPlanDslValidator;
@@ -36,12 +37,13 @@ public class ProcessingPlanSqlTool {
     public RenderedProcessingSql renderInsertSelectSql(
             String taskId,
             AgentSqlGenerationContext context,
+            DslGenerationContext dslGenerationContext,
             ProcessingPlanDsl processingPlanDsl
     ) {
-        validateContext(taskId, context);
+        validateContext(taskId, context, dslGenerationContext);
         ProcessingPlanDsl validatedPlan = processingPlanDslValidator.validate(
                 processingPlanDsl,
-                context.dslGenerationContext()
+                dslGenerationContext
         );
         String sql = renderSql(context, validatedPlan);
         return new RenderedProcessingSql(
@@ -55,7 +57,7 @@ public class ProcessingPlanSqlTool {
         );
     }
 
-    private void validateContext(String taskId, AgentSqlGenerationContext context) {
+    private void validateContext(String taskId, AgentSqlGenerationContext context, DslGenerationContext dslGenerationContext) {
         if (context == null) {
             throw new IllegalArgumentException("SQL 生成上下文不能为空。");
         }
@@ -65,10 +67,10 @@ public class ProcessingPlanSqlTool {
         if (!taskId.equals(context.taskId())) {
             throw new IllegalArgumentException("SQL 生成上下文 taskId 与工具入参不一致。");
         }
-        if (context.dslGenerationContext() == null) {
-            throw new IllegalArgumentException("SQL 生成上下文缺少 dslGenerationContext。");
+        if (dslGenerationContext == null) {
+            throw new IllegalArgumentException("DSL 生成上下文不能为空。");
         }
-        if (!taskId.equals(context.dslGenerationContext().taskId())) {
+        if (!taskId.equals(dslGenerationContext.taskId())) {
             throw new IllegalArgumentException("dslGenerationContext taskId 与工具入参不一致。");
         }
         validateQualifiedTable(context.stagingTable(), "临时表名非法。");

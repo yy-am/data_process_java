@@ -17,11 +17,6 @@ public enum AgentWorkflowStage {
     TASK_CONTEXT_READY,
 
     /**
-     * 已完成模板识别结果保存，但模板上下文可能尚未完整加载。保留该阶段用于兼容旧流程。
-     */
-    TEMPLATE_RECOGNIZED,
-
-    /**
      * 已完成模板识别、标准模板、加工规则、必填字段和值集元数据加载。
      */
     TEMPLATE_CONTEXT_READY,
@@ -32,7 +27,7 @@ public enum AgentWorkflowStage {
     FIELD_BINDING_PLAN_READY,
 
     /**
-     * 已完成用户确认项分析。保留该阶段用于表达确认项生成完成后的中间状态。
+     * 已完成用户确认项分析。
      */
     CONFIRMATION_ANALYZED,
 

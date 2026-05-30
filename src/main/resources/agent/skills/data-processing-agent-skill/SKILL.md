@@ -75,23 +75,39 @@ Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地�
    - `confirmationItems` 与 `userConfirmationResult`：如果存在待确认项，则用户确认结果必须完整覆盖全部确认项。
    - 必填字段手工输入、值集选择、字段映射选择等用户确认结果必须已经保存在任务状态中。
 
-   成功后返回 `POST_CONFIRMATION_CONTEXT_READY`。
+   成功后返回 `POST_CONFIRMATION_CONTEXT_READY`，并返回后续生成 `processingPlanDsl` 所需的业务加工上下文，例如模板识别结果、模板包、字段绑定计划、用户确认结果和值集元数据。Agent 必须在后续生成 `processingPlanDsl` 时使用这些业务上下文。
 
 7. `prepare_sql_generation_context(taskId)`
 
-   仅当阶段为 `POST_CONFIRMATION_CONTEXT_READY` 时调用。工具内部必须将原始 Excel 全量数据写入临时表，并返回 SQL 片段生成所需的完整上下文，至少包括：
+   仅当阶段为 `POST_CONFIRMATION_CONTEXT_READY` 时调用。工具内部必须将原始 Excel 全量数据写入临时表，并只返回确定性的 SQL 表上下文。该工具不得重复返回模板、规则、字段绑定计划或用户确认结果。
+
+   返回结构必须为：
+
+   ```json
+   {
+     "taskId": "任务编号",
+     "stagingTable": "临时表标识",
+     "resultTable": "结果表标识",
+     "loadedRows": 0,
+     "columnMappings": [
+       {
+         "actualColumn": "Excel 原始列名",
+         "elasticColumn": "临时表弹性字段名"
+       }
+     ]
+   }
+   ```
+
+   字段含义：
 
    - `stagingTable`：临时表标识。
+   - `resultTable`：结果表标识。
    - `loadedRows`：临时表写入行数。
    - `columnMappings`：Excel 原始列到临时表弹性字段的映射，例如 `actualColumn -> elasticColumn`。
-   - `templateRecognitionResult`：模板识别结果。
-   - `templateBundle`：预置模板、标准模板和加工规则。
-   - `fieldBindingPlan`：已校验通过的字段绑定计划。
-   - `userConfirmationResult`：已校验通过的用户确认结果。
 
 8. `execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)`
 
-   接收 `prepare_sql_generation_context` 返回的 SQL 生成上下文和 Agent 生成的目标列 SQL 表达式片段计划。工具内部必须完成 SQL 片段校验和完整 `insert into ... select ... from ...` SQL 拼接。当前工具不执行数据库落表，落表执行由后续确定性实现接入。
+   接收 `prepare_sql_generation_context` 返回的 SQL 表上下文和 Agent 生成的目标列 SQL 表达式片段计划。工具内部必须基于 `taskId` 从任务状态读取业务加工上下文，完成 DSL 校验、SQL 片段安全校验和完整 `insert into ... select ... from ...` SQL 拼接。当前工具不执行数据库落表，落表执行由后续确定性实现接入。
 
 失败兜底工具：
 
@@ -112,13 +128,12 @@ Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地�
 - `FAILED`：任务失败。
 - `COMPLETED`：任务完成。
 
-`USER_CONFIRMED` 不是最终完成阶段，而是确认后流程的起点。进入该阶段后必须继续执行第 6 步。
+`USER_CONFIRMED` 表示确认条件已经满足：可能是前端用户已提交确认结果，也可能是工具判断本任务无需用户确认。它不是最终完成阶段，而是确认后流程的起点。进入该阶段后必须继续执行第 6 步。
 
 阶段含义：
 
 - `RECEIVED`：任务已创建，但尚未完成解析文件摘要加载。
 - `TASK_CONTEXT_READY`：解析文件摘要已加载，可以进入模板识别。
-- `TEMPLATE_RECOGNIZED`：模板识别结果已保存。该阶段用于兼容旧流程，新流程通常直接进入 `TEMPLATE_CONTEXT_READY`。
 - `TEMPLATE_CONTEXT_READY`：模板识别、标准模板、加工规则、必填字段和值集元数据均已准备完成。
 - `FIELD_BINDING_PLAN_READY`：字段绑定计划已接收并校验。该阶段通常不会长期停留。
 - `CONFIRMATION_ANALYZED`：用户确认项分析已完成。该阶段用于表达确认项分析中间态。
@@ -150,7 +165,7 @@ prepare_task_context(taskId, parsedFileRef)
 - 如果阶段是 `SQL_GENERATION_CONTEXT_READY`，进入第 8 步。
 - 如果阶段是 `PROCESSING_SQL_RENDERED`、`RESULT_TABLE_WRITTEN`、`FAILED` 或 `COMPLETED`，直接返回工具结果中的 `agentResponse`。
 - 如果阶段是 `RECEIVED`、`TASK_CONTEXT_READY` 或尚未完成模板识别，进入第 2 步。
-- 如果阶段是 `TEMPLATE_RECOGNIZED`、`TEMPLATE_CONTEXT_READY`、`FIELD_BINDING_PLAN_READY` 或 `CONFIRMATION_ANALYZED`，进入第 3 步或第 4 步中尚未完成的步骤。
+- 如果阶段是 `TEMPLATE_CONTEXT_READY`、`FIELD_BINDING_PLAN_READY` 或 `CONFIRMATION_ANALYZED`，进入第 3 步或第 4 步中尚未完成的步骤。
 
 成功进入第 2 步前，必须确认 `parsedExcelSummary.sourceHeaders` 非空。若为空，调用 `mark_task_failed`。
 
@@ -300,6 +315,7 @@ prepare_post_confirmation_context(taskId)
 - 模板识别结果、模板上下文、加工规则和字段绑定计划已存在。
 - 如果存在确认项，用户确认结果必须完整覆盖全部确认项。
 - 用户确认结果中的字段映射选择、值集选择、手工输入固定值，均已保存到任务状态。
+- 工具返回了生成 `processingPlanDsl` 所需的业务加工上下文。
 - 后续 `prepare_sql_generation_context` 可以仅通过 `taskId` 从任务状态读取所需上下文。
 
 根据工具返回分支：
@@ -322,9 +338,10 @@ prepare_sql_generation_context(taskId)
 
 - 原始 Excel 全量数据已经写入临时表。
 - 返回 `stagingTable`。
+- 返回 `resultTable`。
 - 返回 `loadedRows`，且该值与可处理数据行数一致。
 - 返回 `columnMappings`，且每个映射都包含 `actualColumn` 和 `elasticColumn`。
-- 返回生成 SQL 片段所需的模板、规则、字段绑定和用户确认上下文。
+- 不得返回模板、规则、字段绑定计划或用户确认结果；这些业务上下文必须来自第 6 步返回内容和任务状态。
 
 失败分支：
 
@@ -335,6 +352,11 @@ prepare_sql_generation_context(taskId)
 ### 第 8 步：生成目标列 SQL 表达式片段计划
 
 Agent 只能生成目标列表达式级 SQL 片段，不得生成完整 SQL。
+
+生成 `processingPlanDsl` 时必须同时使用两类上下文：
+
+- 第 6 步 `prepare_post_confirmation_context` 返回的业务加工上下文：模板、规则、字段绑定计划、用户确认结果、值集元数据等。
+- 第 7 步 `prepare_sql_generation_context` 返回的 SQL 表上下文：`stagingTable`、`resultTable`、`loadedRows`、`columnMappings`。
 
 必须构造 `processingPlanDsl`，推荐结构如下：
 
@@ -397,6 +419,7 @@ execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)
 该工具内部负责：
 
 - 校验 `processingPlanDsl` 完整性。
+- 基于 `taskId` 从任务状态重建 DSL 校验上下文，不接受 Agent 传入模板、规则、字段绑定计划或用户确认结果作为校验依据。
 - 校验所有 SQL 表达式片段安全性。
 - 使用 `sqlGenerationContext.resultTable` 作为结果表。
 - 使用 `sqlGenerationContext.stagingTable` 作为来源临时表。

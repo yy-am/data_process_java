@@ -5,16 +5,23 @@ import com.example.dataprocess.agent.model.AgentConfirmationItem;
 import com.example.dataprocess.agent.model.AgentSqlGenerationContext;
 import com.example.dataprocess.agent.model.AgentUserConfirmationRequest;
 import com.example.dataprocess.agent.model.AgentWorkflowStage;
+import com.example.dataprocess.agent.model.ConfirmationType;
 import com.example.dataprocess.agent.model.DataProcessingAgentResponse;
 import com.example.dataprocess.agent.model.DataProcessingAgentState;
+import com.example.dataprocess.agent.model.FieldBindingItem;
 import com.example.dataprocess.agent.model.FieldBindingPlan;
+import com.example.dataprocess.agent.model.FieldBindingStatus;
 import com.example.dataprocess.agent.model.ParsedExcelSummary;
 import com.example.dataprocess.agent.model.RenderedProcessingSql;
 import com.example.dataprocess.agent.model.StandardRequiredFields;
 import com.example.dataprocess.agent.model.TemplateBundle;
 import com.example.dataprocess.agent.model.ValueSetMetadata;
+import com.example.dataprocess.domain.model.ActualColumnMapping;
+import com.example.dataprocess.domain.model.DslGenerationContext;
 import com.example.dataprocess.domain.model.ProcessingPlanDsl;
 import com.example.dataprocess.domain.model.ProcessingRule;
+import com.example.dataprocess.domain.model.ProcessingRuleItem;
+import com.example.dataprocess.domain.model.TargetColumnGenerationContext;
 import com.example.dataprocess.domain.model.TemplateRecognitionResult;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -26,6 +33,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Spring AI method tools exposed to ReactAgent.
@@ -202,6 +211,11 @@ public class DataProcessingAgentToolMethods {
                 .addTrace("确认后的加工上下文校验通过，可以准备 SQL 生成上下文。"));
 
         Map<String, Object> result = baseContext(savedState);
+        result.put("templateBundle", savedState.templateBundle());
+        result.put("requiredFields", savedState.requiredFields());
+        result.put("valueSetMetadata", savedState.valueSetMetadata());
+        result.put("fieldBindingPlan", savedState.fieldBindingPlan());
+        result.put("dslBusinessContext", buildDslBusinessContext(savedState));
         result.put("readyForSqlGeneration", true);
         result.put("nextAction", nextAction(savedState));
         result.put("agentResponse", toResponse(savedState));
@@ -215,12 +229,13 @@ public class DataProcessingAgentToolMethods {
     @Tool(name = "execute_processing_plan", description = "校验加工计划 SQL 片段并拼接完整 INSERT SELECT SQL；当前不执行数据库落表。")
     public RenderedProcessingSql executeProcessingPlan(
             @ToolParam(description = "任务编号") String taskId,
-            @ToolParam(description = "prepare_sql_generation_context 工具返回的 SQL 生成上下文") AgentSqlGenerationContext sqlGenerationContext,
+            @ToolParam(description = "prepare_sql_generation_context 工具返回的 SQL 表上下文") AgentSqlGenerationContext sqlGenerationContext,
             @ToolParam(description = "Agent 生成的目标列 SQL 表达式片段计划") ProcessingPlanDsl processingPlanDsl
     ) {
         RenderedProcessingSql renderedSql = processingPlanSqlTool.renderInsertSelectSql(
                 taskId,
                 sqlGenerationContext,
+                buildDslGenerationContext(requiredState(taskId), sqlGenerationContext),
                 processingPlanDsl
         );
         stateTool.saveTaskState(requiredState(taskId)
@@ -291,7 +306,6 @@ public class DataProcessingAgentToolMethods {
     public DataProcessingAgentState saveTemplateRecognition(String taskId, TemplateRecognitionResult result) {
         DataProcessingAgentState state = requiredState(taskId)
                 .withTemplateRecognitionResult(result)
-                .withStage(AgentWorkflowStage.TEMPLATE_RECOGNIZED)
                 .addTrace("完成模板识别。");
         return stateTool.saveTaskState(state);
     }
@@ -464,11 +478,178 @@ public class DataProcessingAgentToolMethods {
         }
     }
 
+    private List<Map<String, Object>> buildDslBusinessContext(DataProcessingAgentState state) {
+        return buildTargetColumnGenerationContexts(state, List.of()).stream()
+                .map(targetContext -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("targetColumn", targetContext.targetColumn());
+                    item.put("ruleType", targetContext.ruleType());
+                    item.put("actualColumnMappings", targetContext.actualColumnMappings());
+                    item.put("ruleGuide", targetContext.ruleGuide());
+                    item.put("example", targetContext.example());
+                    item.put("confirmedValue", targetContext.confirmedValue());
+                    return item;
+                })
+                .toList();
+    }
+
+    private DslGenerationContext buildDslGenerationContext(
+            DataProcessingAgentState state,
+            AgentSqlGenerationContext sqlGenerationContext
+    ) {
+        return new DslGenerationContext(
+                state.taskId(),
+                state.templateRecognitionResult().presetTemplateCode(),
+                state.templateRecognitionResult().standardTemplateCode(),
+                buildTargetColumnGenerationContexts(state, safeColumnMappings(sqlGenerationContext))
+        );
+    }
+
+    private List<TargetColumnGenerationContext> buildTargetColumnGenerationContexts(
+            DataProcessingAgentState state,
+            List<ActualColumnMapping> columnMappings
+    ) {
+        Map<String, ProcessingRuleItem> ruleByTargetColumn = state.templateBundle().processingRule().ruleItems().stream()
+                .collect(Collectors.toMap(
+                        ProcessingRuleItem::targetColumn,
+                        Function.identity(),
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
+        Map<String, List<FieldBindingItem>> bindingByTargetColumn = safeFieldBindings(state).stream()
+                .collect(Collectors.groupingBy(
+                        FieldBindingItem::targetColumn,
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+        Map<String, ActualColumnMapping> columnMappingByActualColumn = columnMappings.stream()
+                .collect(Collectors.toMap(
+                        ActualColumnMapping::actualColumn,
+                        Function.identity(),
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
+
+        Map<String, TargetColumnGenerationContext> targetContexts = new LinkedHashMap<>();
+        for (ProcessingRuleItem ruleItem : ruleByTargetColumn.values()) {
+            targetContexts.put(ruleItem.targetColumn(), new TargetColumnGenerationContext(
+                    ruleItem.targetColumn(),
+                    ruleItem.ruleType(),
+                    resolveActualColumnMappings(
+                            bindingByTargetColumn.getOrDefault(ruleItem.targetColumn(), List.of()),
+                            state.userConfirmationResult(),
+                            columnMappingByActualColumn
+                    ),
+                    ruleItem.ruleGuide(),
+                    ruleItem.example(),
+                    confirmedValue(state.userConfirmationResult(), ruleItem.targetColumn())
+            ));
+        }
+
+        for (AgentConfirmationDecision decision : safeDecisions(state.userConfirmationResult())) {
+            if (decision.confirmationType() == ConfirmationType.INPUT_CONFIRMATION
+                    && !targetContexts.containsKey(decision.targetColumn())) {
+                targetContexts.put(decision.targetColumn(), new TargetColumnGenerationContext(
+                        decision.targetColumn(),
+                        "USER_CONFIRM_INPUT",
+                        List.of(),
+                        null,
+                        null,
+                        decision.inputValue()
+                ));
+            }
+        }
+
+        return List.copyOf(targetContexts.values());
+    }
+
+    private List<ActualColumnMapping> resolveActualColumnMappings(
+            List<FieldBindingItem> bindings,
+            List<AgentConfirmationDecision> decisions,
+            Map<String, ActualColumnMapping> columnMappingByActualColumn
+    ) {
+        return bindings.stream()
+                .map(binding -> selectedHeader(binding, decisions))
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .map(selectedHeader -> resolveActualColumnMapping(selectedHeader, columnMappingByActualColumn))
+                .toList();
+    }
+
+    private ActualColumnMapping resolveActualColumnMapping(
+            String selectedHeader,
+            Map<String, ActualColumnMapping> columnMappingByActualColumn
+    ) {
+        if (columnMappingByActualColumn.isEmpty()) {
+            return new ActualColumnMapping(selectedHeader, null);
+        }
+        ActualColumnMapping mapping = columnMappingByActualColumn.get(selectedHeader);
+        if (mapping == null) {
+            throw new IllegalStateException("临时表字段映射缺少 Excel 原始列: " + selectedHeader);
+        }
+        return mapping;
+    }
+
+    private String selectedHeader(FieldBindingItem binding, List<AgentConfirmationDecision> decisions) {
+        if (binding.status() == FieldBindingStatus.CONFIRMED) {
+            return binding.selectedHeader();
+        }
+        if (binding.status() == FieldBindingStatus.NEEDS_CONFIRMATION) {
+            return safeDecisions(decisions).stream()
+                    .filter(decision -> decision.confirmationType() == ConfirmationType.MAPPING_CONFIRMATION)
+                    .filter(decision -> binding.targetColumn().equals(decision.targetColumn()))
+                    .filter(decision -> binding.sourceColumn() == null || binding.sourceColumn().equals(sourceColumnFromKey(decision.confirmationKey())))
+                    .map(AgentConfirmationDecision::selectedHeader)
+                    .filter(value -> value != null && !value.isBlank())
+                    .findFirst()
+                    .orElse(null);
+        }
+        return null;
+    }
+
+    private String confirmedValue(List<AgentConfirmationDecision> decisions, String targetColumn) {
+        return safeDecisions(decisions).stream()
+                .filter(decision -> targetColumn.equals(decision.targetColumn()))
+                .filter(decision -> decision.confirmationType() == ConfirmationType.OPTION_CONFIRMATION
+                        || decision.confirmationType() == ConfirmationType.INPUT_CONFIRMATION)
+                .map(decision -> decision.selectedValue() == null || decision.selectedValue().isBlank()
+                        ? decision.inputValue()
+                        : decision.selectedValue())
+                .filter(value -> value != null && !value.isBlank())
+                .findFirst()
+                .orElse(null);
+    }
+
+    private String sourceColumnFromKey(String confirmationKey) {
+        if (confirmationKey == null) {
+            return null;
+        }
+        String[] parts = confirmationKey.split("::", -1);
+        return parts.length >= 3 ? parts[2] : null;
+    }
+
+    private List<FieldBindingItem> safeFieldBindings(DataProcessingAgentState state) {
+        if (state.fieldBindingPlan() == null || state.fieldBindingPlan().items() == null) {
+            return List.of();
+        }
+        return state.fieldBindingPlan().items();
+    }
+
+    private List<AgentConfirmationDecision> safeDecisions(List<AgentConfirmationDecision> decisions) {
+        return decisions == null ? List.of() : decisions;
+    }
+
+    private List<ActualColumnMapping> safeColumnMappings(AgentSqlGenerationContext sqlGenerationContext) {
+        return sqlGenerationContext == null || sqlGenerationContext.columnMappings() == null
+                ? List.of()
+                : sqlGenerationContext.columnMappings();
+    }
+
     private String nextAction(DataProcessingAgentState state) {
         return switch (state.stage()) {
             case RECEIVED -> "请先通过 prepare_task_context 加载解析文件摘要。";
             case TASK_CONTEXT_READY -> "请调用 load_template_catalog，并基于模板目录和 Excel 摘要识别模板。";
-            case TEMPLATE_RECOGNIZED, TEMPLATE_CONTEXT_READY -> "请基于已加载的模板上下文生成 FieldBindingPlan，然后调用 accept_field_binding_plan。";
+            case TEMPLATE_CONTEXT_READY -> "请基于已加载的模板上下文生成 FieldBindingPlan，然后调用 accept_field_binding_plan。";
             case FIELD_BINDING_PLAN_READY, CONFIRMATION_ANALYZED -> "请调用 accept_field_binding_plan 生成确认分析结果，或直接返回已有确认分析响应。";
             case USER_CONFIRMATION_REQUIRED -> "请直接返回 agentResponse，等待前端提交用户确认结果。";
             case USER_CONFIRMED -> "请调用 prepare_post_confirmation_context 校验并准备确认后的加工上下文。";
@@ -514,7 +695,6 @@ public class DataProcessingAgentToolMethods {
         return switch (state.stage()) {
             case RECEIVED -> "任务已接收。";
             case TASK_CONTEXT_READY -> "任务上下文已准备完成。";
-            case TEMPLATE_RECOGNIZED -> "模板识别已完成。";
             case TEMPLATE_CONTEXT_READY -> "模板上下文已准备完成。";
             case FIELD_BINDING_PLAN_READY -> "字段绑定计划已校验。";
             case CONFIRMATION_ANALYZED -> "确认项分析已完成。";
