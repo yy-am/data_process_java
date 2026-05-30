@@ -47,6 +47,11 @@ public enum AgentWorkflowStage {
     USER_CONFIRMED,
 
     /**
+     * 确认后的加工上下文已校验并归一化，可以调用工具准备 SQL 生成上下文。
+     */
+    POST_CONFIRMATION_CONTEXT_READY,
+
+    /**
      * 原始 Excel 数据已写入临时表，SQL 生成上下文已准备好。
      */
     SQL_GENERATION_CONTEXT_READY,

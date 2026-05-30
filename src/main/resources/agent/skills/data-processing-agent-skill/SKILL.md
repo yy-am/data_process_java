@@ -63,9 +63,23 @@ Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地�
 
 ### 确认后工具
 
-6. `prepare_sql_generation_context(taskId)`
+6. `prepare_post_confirmation_context(taskId)`
 
-   用户确认完成后调用。工具内部必须将原始 Excel 全量数据写入临时表，并返回 SQL 片段生成所需的完整上下文，至少包括：
+   用户确认完成或无需用户确认后调用。工具内部必须校验确认后的加工上下文是否满足后续临时表落库和 SQL 生成上下文准备的前提。该工具不写临时表、不生成 SQL，只做确认后状态完整性校验和阶段推进。
+
+   该工具必须确认至少具备：
+
+   - `templateRecognitionResult`：模板识别结果已存在。
+   - `templateBundle`：预置模板、标准模板和加工规则已存在。
+   - `fieldBindingPlan`：字段绑定计划已校验并保存。
+   - `confirmationItems` 与 `userConfirmationResult`：如果存在待确认项，则用户确认结果必须完整覆盖全部确认项。
+   - 必填字段手工输入、值集选择、字段映射选择等用户确认结果必须已经保存在任务状态中。
+
+   成功后返回 `POST_CONFIRMATION_CONTEXT_READY`。
+
+7. `prepare_sql_generation_context(taskId)`
+
+   仅当阶段为 `POST_CONFIRMATION_CONTEXT_READY` 时调用。工具内部必须将原始 Excel 全量数据写入临时表，并返回 SQL 片段生成所需的完整上下文，至少包括：
 
    - `stagingTable`：临时表标识。
    - `loadedRows`：临时表写入行数。
@@ -75,9 +89,9 @@ Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地�
    - `fieldBindingPlan`：已校验通过的字段绑定计划。
    - `userConfirmationResult`：已校验通过的用户确认结果。
 
-7. `execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)`
+8. `execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)`
 
-   接收第 6 步返回的 SQL 生成上下文和 Agent 生成的目标列 SQL 表达式片段计划。工具内部必须完成 SQL 片段校验和完整 `insert into ... select ... from ...` SQL 拼接。当前工具不执行数据库落表，落表执行由后续确定性实现接入。
+   接收 `prepare_sql_generation_context` 返回的 SQL 生成上下文和 Agent 生成的目标列 SQL 表达式片段计划。工具内部必须完成 SQL 片段校验和完整 `insert into ... select ... from ...` SQL 拼接。当前工具不执行数据库落表，落表执行由后续确定性实现接入。
 
 失败兜底工具：
 
@@ -110,6 +124,7 @@ Agent 不直接处理上传流，不直接解析 Excel，不直接读取本地�
 - `CONFIRMATION_ANALYZED`：用户确认项分析已完成。该阶段用于表达确认项分析中间态。
 - `USER_CONFIRMATION_REQUIRED`：需要前端用户确认。
 - `USER_CONFIRMED`：用户确认已完成，或无需用户确认；可以进入 SQL 生成流程。
+- `POST_CONFIRMATION_CONTEXT_READY`：确认后的加工上下文已校验通过，可以调用工具准备 SQL 生成上下文。
 - `SQL_GENERATION_CONTEXT_READY`：临时表和 SQL 生成上下文已准备完成。
 - `PROCESSING_SQL_RENDERED`：完整 `INSERT SELECT` SQL 已拼接完成，但尚未执行落表。
 - `RESULT_TABLE_WRITTEN`：结果表写入已执行。
@@ -131,7 +146,8 @@ prepare_task_context(taskId, parsedFileRef)
 - 如果阶段是 `USER_CONFIRMATION_REQUIRED`，且本次输入包含非空 `userConfirmationRequest`，进入第 5 步。
 - 如果阶段是 `USER_CONFIRMATION_REQUIRED`，且本次输入不包含 `userConfirmationRequest`，直接返回工具结果中的 `agentResponse`，等待前端确认。
 - 如果阶段是 `USER_CONFIRMED`，进入第 6 步。
-- 如果阶段是 `SQL_GENERATION_CONTEXT_READY`，进入第 7 步。
+- 如果阶段是 `POST_CONFIRMATION_CONTEXT_READY`，进入第 7 步。
+- 如果阶段是 `SQL_GENERATION_CONTEXT_READY`，进入第 8 步。
 - 如果阶段是 `PROCESSING_SQL_RENDERED`、`RESULT_TABLE_WRITTEN`、`FAILED` 或 `COMPLETED`，直接返回工具结果中的 `agentResponse`。
 - 如果阶段是 `RECEIVED`、`TASK_CONTEXT_READY` 或尚未完成模板识别，进入第 2 步。
 - 如果阶段是 `TEMPLATE_RECOGNIZED`、`TEMPLATE_CONTEXT_READY`、`FIELD_BINDING_PLAN_READY` 或 `CONFIRMATION_ANALYZED`，进入第 3 步或第 4 步中尚未完成的步骤。
@@ -252,7 +268,6 @@ accept_field_binding_plan(taskId, fieldBindingPlan)
 
 - 如果返回 `USER_CONFIRMATION_REQUIRED`，必须立即返回该响应，不得继续执行。
 - 如果返回 `USER_CONFIRMED`，进入第 6 步。
-- 如果返回 `PROCESSING_SQL_RENDERED`，必须立即返回该响应，不得继续执行。
 - 如果返回 `FAILED`，必须立即返回该响应。
 
 ### 第 5 步：处理用户确认提交
@@ -268,11 +283,34 @@ submit_user_confirmation(taskId, userConfirmationRequest)
 根据工具返回分支：
 
 - 如果返回 `USER_CONFIRMED`，进入第 6 步。
-- 如果返回 `USER_CONFIRMATION_REQUIRED`、`PROCESSING_SQL_RENDERED` 或 `FAILED`，必须立即返回该响应，不得继续执行。
+- 如果返回 `USER_CONFIRMATION_REQUIRED` 或 `FAILED`，必须立即返回该响应，不得继续执行。
 
-### 第 6 步：落临时表并准备 SQL 生成上下文
+### 第 6 步：准备确认后的加工上下文
 
 当阶段为 `USER_CONFIRMED` 时执行。
+
+必须调用：
+
+```text
+prepare_post_confirmation_context(taskId)
+```
+
+成功条件：
+
+- 模板识别结果、模板上下文、加工规则和字段绑定计划已存在。
+- 如果存在确认项，用户确认结果必须完整覆盖全部确认项。
+- 用户确认结果中的字段映射选择、值集选择、手工输入固定值，均已保存到任务状态。
+- 后续 `prepare_sql_generation_context` 可以仅通过 `taskId` 从任务状态读取所需上下文。
+
+根据工具返回分支：
+
+- 如果返回 `POST_CONFIRMATION_CONTEXT_READY`，进入第 7 步。
+- 如果返回 `USER_CONFIRMATION_REQUIRED` 或 `FAILED`，必须立即返回该响应，不得继续执行。
+- 如果工具报错或返回内容无法证明确认后上下文已准备完成，调用 `mark_task_failed`。
+
+### 第 7 步：落临时表并准备 SQL 生成上下文
+
+当阶段为 `POST_CONFIRMATION_CONTEXT_READY` 时执行。
 
 必须调用：
 
@@ -294,7 +332,7 @@ prepare_sql_generation_context(taskId)
 - 原始 Excel 数据写入失败，调用 `mark_task_failed`。
 - 缺少 `columnMappings` 或上下文不完整，调用 `mark_task_failed`。
 
-### 第 7 步：生成目标列 SQL 表达式片段计划
+### 第 8 步：生成目标列 SQL 表达式片段计划
 
 Agent 只能生成目标列表达式级 SQL 片段，不得生成完整 SQL。
 
@@ -348,7 +386,7 @@ SQL 安全规则：
 - `expressionSql` 只能引用工具返回的 `elasticColumn`，不能引用 Excel 原始表头。
 - 字符串字面量必须正确转义，且不得为了通过校验而改变业务含义。
 
-### 第 8 步：提交加工计划并写入结果表
+### 第 9 步：提交加工计划并写入结果表
 
 SQL 片段计划生成后，必须调用：
 

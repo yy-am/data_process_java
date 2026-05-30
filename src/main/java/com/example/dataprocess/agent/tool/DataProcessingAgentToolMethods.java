@@ -21,9 +21,11 @@ import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Spring AI method tools exposed to ReactAgent.
@@ -185,6 +187,28 @@ public class DataProcessingAgentToolMethods {
     }
 
     /**
+     * 新增暴露给模型的合并工具：校验用户确认后的任务状态是否满足 SQL 生成上下文准备前提。
+     * 该工具不落临时表、不生成 SQL，只负责确认后上下文完整性校验和阶段推进。
+     */
+    @Tool(name = "prepare_post_confirmation_context", description = "校验用户确认后的任务状态，确认字段绑定、用户确认、模板和规则上下文齐备后，准备进入 SQL 生成上下文步骤。")
+    public Map<String, Object> preparePostConfirmationContext(
+            @ToolParam(description = "任务编号") String taskId
+    ) {
+        DataProcessingAgentState state = requiredState(taskId);
+        validatePostConfirmationContext(state);
+
+        DataProcessingAgentState savedState = stateTool.saveTaskState(state
+                .withStage(AgentWorkflowStage.POST_CONFIRMATION_CONTEXT_READY)
+                .addTrace("确认后的加工上下文校验通过，可以准备 SQL 生成上下文。"));
+
+        Map<String, Object> result = baseContext(savedState);
+        result.put("readyForSqlGeneration", true);
+        result.put("nextAction", nextAction(savedState));
+        result.put("agentResponse", toResponse(savedState));
+        return result;
+    }
+
+    /**
      * 新增暴露给模型的合并工具：校验 Agent 生成的 SQL 片段计划，并拼接完整 INSERT ... SELECT SQL。
      * 当前实现只负责 SQL 校验和拼接，不执行数据库落表。
      */
@@ -200,6 +224,7 @@ public class DataProcessingAgentToolMethods {
                 processingPlanDsl
         );
         stateTool.saveTaskState(requiredState(taskId)
+                .withRenderedProcessingSql(renderedSql)
                 .withStage(AgentWorkflowStage.PROCESSING_SQL_RENDERED)
                 .addTrace("完成 SQL 片段校验并拼接完整 INSERT SELECT SQL。"));
         return renderedSql;
@@ -402,6 +427,43 @@ public class DataProcessingAgentToolMethods {
         return result;
     }
 
+    private void validatePostConfirmationContext(DataProcessingAgentState state) {
+        if (state.stage() != AgentWorkflowStage.USER_CONFIRMED
+                && state.stage() != AgentWorkflowStage.POST_CONFIRMATION_CONTEXT_READY) {
+            throw new IllegalStateException("当前阶段不能准备确认后上下文: " + state.stage());
+        }
+        if (state.parsedExcelSummary() == null) {
+            throw new IllegalStateException("缺少解析文件摘要，不能准备确认后上下文。");
+        }
+        if (state.templateRecognitionResult() == null) {
+            throw new IllegalStateException("缺少模板识别结果，不能准备确认后上下文。");
+        }
+        if (state.templateBundle() == null || state.templateBundle().processingRule() == null) {
+            throw new IllegalStateException("缺少模板或加工规则上下文，不能准备确认后上下文。");
+        }
+        if (state.fieldBindingPlan() == null || state.fieldBindingPlan().items().isEmpty()) {
+            throw new IllegalStateException("缺少字段绑定计划，不能准备确认后上下文。");
+        }
+
+        List<AgentConfirmationItem> confirmationItems = state.confirmationItems() == null
+                ? List.of()
+                : state.confirmationItems();
+        List<AgentConfirmationDecision> decisions = state.userConfirmationResult() == null
+                ? List.of()
+                : state.userConfirmationResult();
+        if (!confirmationItems.isEmpty()) {
+            Set<String> expectedKeys = confirmationItems.stream()
+                    .map(AgentConfirmationItem::confirmationKey)
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+            Set<String> actualKeys = decisions.stream()
+                    .map(AgentConfirmationDecision::confirmationKey)
+                    .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+            if (!expectedKeys.equals(actualKeys)) {
+                throw new IllegalStateException("用户确认结果不完整，期望 " + expectedKeys + "，实际 " + actualKeys);
+            }
+        }
+    }
+
     private String nextAction(DataProcessingAgentState state) {
         return switch (state.stage()) {
             case RECEIVED -> "请先通过 prepare_task_context 加载解析文件摘要。";
@@ -409,7 +471,8 @@ public class DataProcessingAgentToolMethods {
             case TEMPLATE_RECOGNIZED, TEMPLATE_CONTEXT_READY -> "请基于已加载的模板上下文生成 FieldBindingPlan，然后调用 accept_field_binding_plan。";
             case FIELD_BINDING_PLAN_READY, CONFIRMATION_ANALYZED -> "请调用 accept_field_binding_plan 生成确认分析结果，或直接返回已有确认分析响应。";
             case USER_CONFIRMATION_REQUIRED -> "请直接返回 agentResponse，等待前端提交用户确认结果。";
-            case USER_CONFIRMED -> "请调用 prepare_sql_generation_context 准备 SQL 生成上下文。";
+            case USER_CONFIRMED -> "请调用 prepare_post_confirmation_context 校验并准备确认后的加工上下文。";
+            case POST_CONFIRMATION_CONTEXT_READY -> "请调用 prepare_sql_generation_context 准备 SQL 生成上下文。";
             case SQL_GENERATION_CONTEXT_READY -> "请生成 ProcessingPlanDsl，然后调用 execute_processing_plan。";
             case PROCESSING_SQL_RENDERED -> "完整 SQL 已生成，请直接返回 agentResponse 或最终 SQL 生成结果。";
             case RESULT_TABLE_WRITTEN -> "结果表写入已完成，请返回完成响应。";
@@ -457,6 +520,7 @@ public class DataProcessingAgentToolMethods {
             case CONFIRMATION_ANALYZED -> "确认项分析已完成。";
             case USER_CONFIRMATION_REQUIRED -> "等待用户确认。";
             case USER_CONFIRMED -> "用户确认阶段已完成。";
+            case POST_CONFIRMATION_CONTEXT_READY -> "确认后的加工上下文已准备完成。";
             case SQL_GENERATION_CONTEXT_READY -> "SQL 生成上下文已准备完成。";
             case PROCESSING_SQL_RENDERED -> "完整 SQL 已生成，等待落表执行实现接入。";
             case RESULT_TABLE_WRITTEN -> "结果表已写入。";
