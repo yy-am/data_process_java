@@ -7,6 +7,7 @@ import com.example.dataprocess.interfaces.restful.request.DataProcessingTaskRequ
 import jakarta.validation.Valid;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -14,6 +15,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import reactor.core.publisher.Flux;
+
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * REST entry points for the decoupled data-processing agent flow.
@@ -54,7 +58,29 @@ public class DataProcessingAgentInterface {
     }
 
     @PostMapping(value = "/run", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<AssistantMessage> run(@Valid @RequestBody DataProcessingTaskRequest request) {
-        return agentService.run(request);
+    public Flux<ServerSentEvent<AssistantMessage>> run(@Valid @RequestBody DataProcessingTaskRequest request) {
+        AtomicLong sequence = new AtomicLong();
+        return agentService.run(request)
+                .map(message -> toServerSentEvent(request.taskId(), sequence.incrementAndGet(), message));
+    }
+
+    private ServerSentEvent<AssistantMessage> toServerSentEvent(
+            String taskId,
+            long sequence,
+            AssistantMessage message
+    ) {
+        return ServerSentEvent.<AssistantMessage>builder()
+                .id(taskId + "-" + sequence)
+                .event(metadataValue(message.getMetadata(), "event", "MESSAGE"))
+                .data(message)
+                .build();
+    }
+
+    private String metadataValue(Map<String, Object> metadata, String key, String defaultValue) {
+        if (metadata == null) {
+            return defaultValue;
+        }
+        Object value = metadata.get(key);
+        return value == null || value.toString().isBlank() ? defaultValue : value.toString();
     }
 }
