@@ -68,26 +68,33 @@ public class DataProcessingAgentInterface {
         SseEmitter emitter = new SseEmitter(0L);
         AtomicLong sequence = new AtomicLong();
         AtomicReference<Disposable> subscriptionRef = new AtomicReference<>();
+        String taskId = request.taskId();
+        String inputType = request.inputType();
+        int sourceHeaderCount = request.sourceHeaders() == null ? 0 : request.sourceHeaders().size();
+        int sampleRowCount = request.sampleRows() == null ? 0 : request.sampleRows().size();
         log.info(
                 "Agent SSE request received, taskId={}, inputType={}, sourceHeaderCount={}, sampleRowCount={}",
-                request.taskId(),
-                request.inputType(),
-                request.sourceHeaders() == null ? 0 : request.sourceHeaders().size(),
-                request.sampleRows() == null ? 0 : request.sampleRows().size()
+                taskId,
+                inputType,
+                sourceHeaderCount,
+                sampleRowCount
         );
 
         Disposable subscription = agentService.run(request)
-                .doOnSubscribe(subscription -> log.info("Agent SSE stream subscribed, taskId={}", request.taskId()))
+                .doOnSubscribe(ignoredSubscription -> log.info(
+                        "Agent SSE stream subscribed, taskId={}",
+                        taskId
+                ))
                 .subscribe(
-                        message -> emitMessage(emitter, request.taskId(), sequence.incrementAndGet(), message),
+                        message -> emitMessage(emitter, taskId, sequence.incrementAndGet(), message),
                         ex -> {
-                            log.error("Agent SSE stream failed, taskId={}", request.taskId(), ex);
+                            log.error("Agent SSE stream failed, taskId={}", taskId, ex);
                             emitter.completeWithError(ex);
                         },
                         () -> {
                             log.info(
                                     "Agent SSE stream completed, taskId={}, eventCount={}",
-                                    request.taskId(),
+                                    taskId,
                                     sequence.get()
                             );
                             emitter.complete();
@@ -100,14 +107,14 @@ public class DataProcessingAgentInterface {
             if (current != null && !current.isDisposed()) {
                 current.dispose();
             }
-            log.info("Agent SSE emitter completed, taskId={}, eventCount={}", request.taskId(), sequence.get());
+            log.info("Agent SSE emitter completed, taskId={}, eventCount={}", taskId, sequence.get());
         });
         emitter.onTimeout(() -> {
             Disposable current = subscriptionRef.get();
             if (current != null && !current.isDisposed()) {
                 current.dispose();
             }
-            log.warn("Agent SSE emitter timed out, taskId={}, eventCount={}", request.taskId(), sequence.get());
+            log.warn("Agent SSE emitter timed out, taskId={}, eventCount={}", taskId, sequence.get());
             emitter.complete();
         });
         emitter.onError(ex -> {
@@ -115,7 +122,7 @@ public class DataProcessingAgentInterface {
             if (current != null && !current.isDisposed()) {
                 current.dispose();
             }
-            log.error("Agent SSE emitter failed, taskId={}, eventCount={}", request.taskId(), sequence.get(), ex);
+            log.error("Agent SSE emitter failed, taskId={}, eventCount={}", taskId, sequence.get(), ex);
         });
 
         return emitter;

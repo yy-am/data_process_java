@@ -36,6 +36,8 @@ import java.util.concurrent.atomic.AtomicReference;
 @Service
 public class DataProcessingReactAgentService {
 
+    private static final String AGENT_INTERNAL_MODEL_STREAMING_KEY = "_stream_";
+
     private final ReactAgent dataProcessingReactAgent;
     private final AgentStateTool stateTool;
     private final ParsedExcelFileTool parsedExcelFileTool;
@@ -58,7 +60,10 @@ public class DataProcessingReactAgentService {
             String parsedFileRef = ensureParsedFileRef(request);
             AtomicReference<AssistantMessage> latestAssistantMessage = new AtomicReference<>();
             AtomicReference<OverAllState> latestState = new AtomicReference<>();
-            RunnableConfig config = RunnableConfig.builder().threadId(request.taskId()).build();
+            RunnableConfig config = RunnableConfig.builder()
+                    .threadId(request.taskId())
+                    .addMetadata(AGENT_INTERNAL_MODEL_STREAMING_KEY, false)
+                    .build();
 
             Flux<NodeOutput> agentStream;
             try {
