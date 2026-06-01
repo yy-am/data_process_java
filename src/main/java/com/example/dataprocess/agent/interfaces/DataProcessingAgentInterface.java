@@ -9,17 +9,19 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.http.MediaType;
-import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import reactor.core.publisher.Flux;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.Disposable;
 
+import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * REST entry points for the decoupled data-processing agent flow.
@@ -62,8 +64,10 @@ public class DataProcessingAgentInterface {
     }
 
     @PostMapping(value = "/run", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<ServerSentEvent<AssistantMessage>> run(@Valid @RequestBody DataProcessingTaskRequest request) {
+    public SseEmitter run(@Valid @RequestBody DataProcessingTaskRequest request) {
+        SseEmitter emitter = new SseEmitter(0L);
         AtomicLong sequence = new AtomicLong();
+        AtomicReference<Disposable> subscriptionRef = new AtomicReference<>();
         log.info(
                 "Agent SSE request received, taskId={}, inputType={}, sourceHeaderCount={}, sampleRowCount={}",
                 request.taskId(),
@@ -71,42 +75,77 @@ public class DataProcessingAgentInterface {
                 request.sourceHeaders() == null ? 0 : request.sourceHeaders().size(),
                 request.sampleRows() == null ? 0 : request.sampleRows().size()
         );
-        return agentService.run(request)
+
+        Disposable subscription = agentService.run(request)
                 .doOnSubscribe(subscription -> log.info("Agent SSE stream subscribed, taskId={}", request.taskId()))
-                .map(message -> {
-                    ServerSentEvent<AssistantMessage> event = toServerSentEvent(
-                            request.taskId(),
-                            sequence.incrementAndGet(),
-                            message
-                    );
-                    log.info(
-                            "Agent SSE event emitted, taskId={}, id={}, event={}, textLength={}, metadataKeys={}",
-                            request.taskId(),
-                            event.id(),
-                            event.event(),
-                            textLength(message),
-                            message.getMetadata() == null ? "[]" : message.getMetadata().keySet()
-                    );
-                    return event;
-                })
-                .doOnError(ex -> log.error("Agent SSE stream failed, taskId={}", request.taskId(), ex))
-                .doOnComplete(() -> log.info(
-                        "Agent SSE stream completed, taskId={}, eventCount={}",
-                        request.taskId(),
-                        sequence.get()
-                ));
+                .subscribe(
+                        message -> emitMessage(emitter, request.taskId(), sequence.incrementAndGet(), message),
+                        ex -> {
+                            log.error("Agent SSE stream failed, taskId={}", request.taskId(), ex);
+                            emitter.completeWithError(ex);
+                        },
+                        () -> {
+                            log.info(
+                                    "Agent SSE stream completed, taskId={}, eventCount={}",
+                                    request.taskId(),
+                                    sequence.get()
+                            );
+                            emitter.complete();
+                        }
+                );
+        subscriptionRef.set(subscription);
+
+        emitter.onCompletion(() -> {
+            Disposable current = subscriptionRef.get();
+            if (current != null && !current.isDisposed()) {
+                current.dispose();
+            }
+            log.info("Agent SSE emitter completed, taskId={}, eventCount={}", request.taskId(), sequence.get());
+        });
+        emitter.onTimeout(() -> {
+            Disposable current = subscriptionRef.get();
+            if (current != null && !current.isDisposed()) {
+                current.dispose();
+            }
+            log.warn("Agent SSE emitter timed out, taskId={}, eventCount={}", request.taskId(), sequence.get());
+            emitter.complete();
+        });
+        emitter.onError(ex -> {
+            Disposable current = subscriptionRef.get();
+            if (current != null && !current.isDisposed()) {
+                current.dispose();
+            }
+            log.error("Agent SSE emitter failed, taskId={}, eventCount={}", request.taskId(), sequence.get(), ex);
+        });
+
+        return emitter;
     }
 
-    private ServerSentEvent<AssistantMessage> toServerSentEvent(
+    private void emitMessage(
+            SseEmitter emitter,
             String taskId,
             long sequence,
             AssistantMessage message
     ) {
-        return ServerSentEvent.<AssistantMessage>builder()
-                .id(taskId + "-" + sequence)
-                .event(metadataValue(message.getMetadata(), "event", "MESSAGE"))
-                .data(message)
-                .build();
+        String eventId = taskId + "-" + sequence;
+        String eventName = metadataValue(message.getMetadata(), "event", "MESSAGE");
+        try {
+            emitter.send(SseEmitter.event()
+                    .id(eventId)
+                    .name(eventName)
+                    .data(message, MediaType.APPLICATION_JSON));
+            log.info(
+                    "Agent SSE event emitted, taskId={}, id={}, event={}, textLength={}, metadataKeys={}",
+                    taskId,
+                    eventId,
+                    eventName,
+                    textLength(message),
+                    message.getMetadata() == null ? "[]" : message.getMetadata().keySet()
+            );
+        } catch (IOException | IllegalStateException ex) {
+            log.error("Agent SSE event send failed, taskId={}, id={}, event={}", taskId, eventId, eventName, ex);
+            emitter.completeWithError(ex);
+        }
     }
 
     private String metadataValue(Map<String, Object> metadata, String key, String defaultValue) {
