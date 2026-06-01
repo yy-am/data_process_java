@@ -5,6 +5,8 @@ import com.example.dataprocess.agent.service.DataProcessingReactAgentService;
 import com.example.dataprocess.agent.tool.ParsedExcelFileTool;
 import com.example.dataprocess.interfaces.restful.request.DataProcessingTaskRequest;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
@@ -26,6 +28,8 @@ import java.util.concurrent.atomic.AtomicLong;
 @RestController
 @RequestMapping("/api/agent/data-processing")
 public class DataProcessingAgentInterface {
+
+    private static final Logger log = LoggerFactory.getLogger(DataProcessingAgentInterface.class);
 
     private final ParsedExcelFileTool parsedExcelFileTool;
     private final DataProcessingReactAgentService agentService;
@@ -60,8 +64,37 @@ public class DataProcessingAgentInterface {
     @PostMapping(value = "/run", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<ServerSentEvent<AssistantMessage>> run(@Valid @RequestBody DataProcessingTaskRequest request) {
         AtomicLong sequence = new AtomicLong();
+        log.info(
+                "Agent SSE request received, taskId={}, inputType={}, sourceHeaderCount={}, sampleRowCount={}",
+                request.taskId(),
+                request.inputType(),
+                request.sourceHeaders() == null ? 0 : request.sourceHeaders().size(),
+                request.sampleRows() == null ? 0 : request.sampleRows().size()
+        );
         return agentService.run(request)
-                .map(message -> toServerSentEvent(request.taskId(), sequence.incrementAndGet(), message));
+                .doOnSubscribe(subscription -> log.info("Agent SSE stream subscribed, taskId={}", request.taskId()))
+                .map(message -> {
+                    ServerSentEvent<AssistantMessage> event = toServerSentEvent(
+                            request.taskId(),
+                            sequence.incrementAndGet(),
+                            message
+                    );
+                    log.info(
+                            "Agent SSE event emitted, taskId={}, id={}, event={}, textLength={}, metadataKeys={}",
+                            request.taskId(),
+                            event.id(),
+                            event.event(),
+                            textLength(message),
+                            message.getMetadata() == null ? "[]" : message.getMetadata().keySet()
+                    );
+                    return event;
+                })
+                .doOnError(ex -> log.error("Agent SSE stream failed, taskId={}", request.taskId(), ex))
+                .doOnComplete(() -> log.info(
+                        "Agent SSE stream completed, taskId={}, eventCount={}",
+                        request.taskId(),
+                        sequence.get()
+                ));
     }
 
     private ServerSentEvent<AssistantMessage> toServerSentEvent(
@@ -82,5 +115,10 @@ public class DataProcessingAgentInterface {
         }
         Object value = metadata.get(key);
         return value == null || value.toString().isBlank() ? defaultValue : value.toString();
+    }
+
+    private int textLength(AssistantMessage message) {
+        String text = message.getText();
+        return text == null ? 0 : text.length();
     }
 }
