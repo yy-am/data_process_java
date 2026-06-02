@@ -296,6 +296,13 @@ accept_field_binding_plan(taskId, fieldBindingPlan)
 - 如果返回 `USER_CONFIRMED`，进入第 6 步。
 - 如果返回 `FAILED`，必须立即返回该响应。
 
+前端确认视图硬规则：
+
+- `accept_field_binding_plan` 返回 `USER_CONFIRMATION_REQUIRED` 时，工具已经完成 `fieldBindingPlan` 和 `confirmationItems` 的保存，最终响应必须原样保留工具返回的 `fieldBindingPlan` 和 `confirmationItems`。
+- 最终响应中的 `confirmationItems` 必须完整包含字段映射确认、值集选择确认和手工输入确认，不得因为内容较长而省略、摘要、改名或置空。
+- 字段明确映射和模糊映射来自已保存的 `fieldBindingPlan`；字段映射确认、值集选择确认和手工输入确认来自已保存的 `confirmationItems`。这些结构供前端展示确认页面使用。
+- 如果存在任何待用户确认项，最终响应阶段必须是 `USER_CONFIRMATION_REQUIRED`，不得继续调用确认后工具。
+
 ### 第 5 步：处理用户确认提交
 
 仅当第 1 步返回阶段为 `USER_CONFIRMATION_REQUIRED`，且本次输入包含非空 `userConfirmationRequest` 时执行。
@@ -482,6 +489,7 @@ export_processed_excel(taskId, resultTable)
   "taskId": "...",
   "parsedFileRef": "...",
   "templateRecognitionResult": {},
+  "fieldBindingPlan": {"items": []},
   "confirmationItems": [],
   "userConfirmationResult": [],
   "summary": {},
@@ -489,6 +497,8 @@ export_processed_excel(taskId, resultTable)
   "message": "等待用户确认。"
 }
 ```
+
+其中 `fieldBindingPlan` 必须是工具返回的完整字段绑定计划，前端将据此展示明确映射、模糊映射和缺失映射；`confirmationItems` 必须是工具返回的完整确认项数组，前端将据此展示字段映射确认、值集选择和手工输入控件。不得返回空数组，除非工具明确返回的确认项为空且阶段不是 `USER_CONFIRMATION_REQUIRED`。
 
 完整任务完成时返回：
 
@@ -498,6 +508,7 @@ export_processed_excel(taskId, resultTable)
   "taskId": "...",
   "parsedFileRef": "...",
   "templateRecognitionResult": {},
+  "fieldBindingPlan": {"items": []},
   "confirmationItems": [],
   "userConfirmationResult": [],
   "summary": {
@@ -519,6 +530,7 @@ export_processed_excel(taskId, resultTable)
   "taskId": "...",
   "parsedFileRef": "...",
   "templateRecognitionResult": {},
+  "fieldBindingPlan": {"items": []},
   "confirmationItems": [],
   "userConfirmationResult": [],
   "summary": {
@@ -539,6 +551,7 @@ export_processed_excel(taskId, resultTable)
   "taskId": "...",
   "parsedFileRef": "...",
   "templateRecognitionResult": {},
+  "fieldBindingPlan": {"items": []},
   "confirmationItems": [],
   "userConfirmationResult": [],
   "summary": {
@@ -560,6 +573,7 @@ export_processed_excel(taskId, resultTable)
   "taskId": "...",
   "parsedFileRef": "...",
   "templateRecognitionResult": null,
+  "fieldBindingPlan": null,
   "confirmationItems": [],
   "userConfirmationResult": [],
   "summary": {},

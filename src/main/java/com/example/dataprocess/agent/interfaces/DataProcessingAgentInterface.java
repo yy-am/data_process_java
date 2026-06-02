@@ -1,5 +1,6 @@
 package com.example.dataprocess.agent.interfaces;
 
+import com.example.dataprocess.agent.model.DataProcessingAgentStreamEvent;
 import com.example.dataprocess.agent.model.ParsedExcelFile;
 import com.example.dataprocess.agent.service.DataProcessingReactAgentService;
 import com.example.dataprocess.agent.tool.ParsedExcelFileTool;
@@ -7,7 +8,6 @@ import com.example.dataprocess.interfaces.restful.request.DataProcessingTaskRequ
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.http.MediaType;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.ModelAttribute;
@@ -19,7 +19,6 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
 import java.io.IOException;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -132,22 +131,23 @@ public class DataProcessingAgentInterface {
             SseEmitter emitter,
             String taskId,
             long sequence,
-            AssistantMessage message
+            DataProcessingAgentStreamEvent event
     ) {
         String eventId = taskId + "-" + sequence;
-        String eventName = metadataValue(message.getMetadata(), "event", "MESSAGE");
+        String eventName = event.event() == null || event.event().isBlank() ? "MESSAGE" : event.event();
         try {
             emitter.send(SseEmitter.event()
                     .id(eventId)
                     .name(eventName)
-                    .data(message, MediaType.APPLICATION_JSON));
+                    .data(event, MediaType.APPLICATION_JSON));
             log.info(
-                    "Agent SSE event emitted, taskId={}, id={}, event={}, textLength={}, metadataKeys={}",
+                    "Agent SSE event emitted, taskId={}, id={}, event={}, stage={}, textLength={}, detailKeys={}",
                     taskId,
                     eventId,
                     eventName,
-                    textLength(message),
-                    message.getMetadata() == null ? "[]" : message.getMetadata().keySet()
+                    event.stage(),
+                    textLength(event),
+                    event.detail() == null ? "[]" : event.detail().keySet()
             );
         } catch (IOException | IllegalStateException ex) {
             log.error("Agent SSE event send failed, taskId={}, id={}, event={}", taskId, eventId, eventName, ex);
@@ -155,16 +155,8 @@ public class DataProcessingAgentInterface {
         }
     }
 
-    private String metadataValue(Map<String, Object> metadata, String key, String defaultValue) {
-        if (metadata == null) {
-            return defaultValue;
-        }
-        Object value = metadata.get(key);
-        return value == null || value.toString().isBlank() ? defaultValue : value.toString();
-    }
-
-    private int textLength(AssistantMessage message) {
-        String text = message.getText();
+    private int textLength(DataProcessingAgentStreamEvent event) {
+        String text = event.message();
         return text == null ? 0 : text.length();
     }
 }

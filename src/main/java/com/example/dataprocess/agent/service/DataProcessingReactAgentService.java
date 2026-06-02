@@ -9,6 +9,7 @@ import com.alibaba.cloud.ai.graph.streaming.OutputType;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.example.dataprocess.agent.model.AgentWorkflowStage;
 import com.example.dataprocess.agent.model.DataProcessingAgentResponse;
+import com.example.dataprocess.agent.model.DataProcessingAgentStreamEvent;
 import com.example.dataprocess.agent.model.DataProcessingAgentState;
 import com.example.dataprocess.agent.model.ParsedExcelFile;
 import com.example.dataprocess.agent.tool.AgentStateTool;
@@ -55,7 +56,7 @@ public class DataProcessingReactAgentService {
         this.objectMapper = objectMapper;
     }
 
-    public Flux<AssistantMessage> run(DataProcessingTaskRequest request) {
+    public Flux<DataProcessingAgentStreamEvent> run(DataProcessingTaskRequest request) {
         return Flux.defer(() -> {
             String parsedFileRef = ensureParsedFileRef(request);
             AtomicReference<AssistantMessage> latestAssistantMessage = new AtomicReference<>();
@@ -69,7 +70,7 @@ public class DataProcessingReactAgentService {
             try {
                 agentStream = dataProcessingReactAgent.stream(buildAgentInstruction(request, parsedFileRef), config);
             } catch (Exception ex) {
-                return Flux.just(toErrorMessage(request, parsedFileRef, ex));
+                return Flux.just(toStreamEvent(request.taskId(), toErrorMessage(request, parsedFileRef, ex)));
             }
 
             return Flux.concat(
@@ -92,8 +93,13 @@ public class DataProcessingReactAgentService {
                             latestAssistantMessage.get(),
                             latestState.get()
                     )))
-            ).onErrorResume(ex -> Flux.just(toErrorMessage(request, parsedFileRef, ex)));
-        }).onErrorResume(ex -> Flux.just(toErrorMessage(request, null, ex)));
+            )
+                    .map(message -> toStreamEvent(request.taskId(), message))
+                    .onErrorResume(ex -> Flux.just(toStreamEvent(
+                            request.taskId(),
+                            toErrorMessage(request, parsedFileRef, ex)
+                    )));
+        }).onErrorResume(ex -> Flux.just(toStreamEvent(request.taskId(), toErrorMessage(request, null, ex))));
     }
 
     private String ensureParsedFileRef(DataProcessingTaskRequest request) {
@@ -281,6 +287,7 @@ public class DataProcessingReactAgentService {
                         request.taskId(),
                         parsedFileRef,
                         null,
+                        null,
                         List.of(),
                         List.of(),
                         Map.of(),
@@ -320,6 +327,7 @@ public class DataProcessingReactAgentService {
                             request.taskId(),
                             parsedFileRef,
                             null,
+                            null,
                             List.of(),
                             List.of(),
                             Map.of(),
@@ -340,6 +348,7 @@ public class DataProcessingReactAgentService {
                 failedState.taskId(),
                 failedState.parsedFileRef(),
                 failedState.templateRecognitionResult(),
+                failedState.fieldBindingPlan(),
                 failedState.confirmationItems(),
                 failedState.userConfirmationResult(),
                 failedState.summary(),
@@ -442,12 +451,56 @@ public class DataProcessingReactAgentService {
                 state.taskId(),
                 state.parsedFileRef(),
                 state.templateRecognitionResult(),
+                state.fieldBindingPlan(),
                 state.confirmationItems(),
                 state.userConfirmationResult(),
                 state.summary(),
                 state.stage() == AgentWorkflowStage.FAILED ? "AGENT_TASK_FAILED" : "",
                 responseMessage(state)
         );
+    }
+
+    private DataProcessingAgentStreamEvent toStreamEvent(String taskId, AssistantMessage message) {
+        Map<String, Object> metadata = message.getMetadata() == null ? Map.of() : message.getMetadata();
+        String event = metadataValue(metadata, "event", "MESSAGE");
+        String node = metadataValue(metadata, "node", "");
+        DataProcessingAgentResponse response = responseValue(metadata.get("response"));
+        Optional<DataProcessingAgentState> currentState = stateTool.loadTaskState(taskId);
+        AgentWorkflowStage stage = response != null
+                ? response.stage()
+                : currentState.map(DataProcessingAgentState::stage).orElse(null);
+        return new DataProcessingAgentStreamEvent(
+                event,
+                taskId,
+                stage,
+                stage == null ? "" : stage.name(),
+                node,
+                message.getText(),
+                response,
+                eventDetail(metadata)
+        );
+    }
+
+    private DataProcessingAgentResponse responseValue(Object value) {
+        return value instanceof DataProcessingAgentResponse response ? response : null;
+    }
+
+    private Map<String, Object> eventDetail(Map<String, Object> metadata) {
+        Map<String, Object> detail = new LinkedHashMap<>();
+        metadata.forEach((key, value) -> {
+            if (!"event".equals(key)
+                    && !"taskId".equals(key)
+                    && !"node".equals(key)
+                    && !"response".equals(key)) {
+                detail.put(key, value);
+            }
+        });
+        return detail;
+    }
+
+    private String metadataValue(Map<String, Object> metadata, String key, String defaultValue) {
+        Object value = metadata.get(key);
+        return value == null || value.toString().isBlank() ? defaultValue : value.toString();
     }
 
     private String responseMessage(DataProcessingAgentState state) {

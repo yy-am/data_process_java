@@ -13,6 +13,7 @@ public record DataProcessingAgentResponse(
         String taskId,
         String parsedFileRef,
         TemplateRecognitionResult templateRecognitionResult,
+        FieldBindingPlan fieldBindingPlan,
         List<AgentConfirmationItem> confirmationItems,
         List<AgentConfirmationDecision> userConfirmationResult,
         Map<String, Object> summary,

@@ -680,6 +680,7 @@ public class DataProcessingAgentToolMethods {
                 state.taskId(),
                 state.parsedFileRef(),
                 state.templateRecognitionResult(),
+                state.fieldBindingPlan(),
                 state.confirmationItems(),
                 state.userConfirmationResult(),
                 state.summary(),
@@ -695,6 +696,7 @@ public class DataProcessingAgentToolMethods {
         result.put("taskId", response.taskId());
         result.put("parsedFileRef", response.parsedFileRef());
         result.put("templateRecognitionResult", response.templateRecognitionResult());
+        result.put("fieldBindingPlan", response.fieldBindingPlan());
         result.put("confirmationItems", response.confirmationItems());
         result.put("userConfirmationResult", response.userConfirmationResult());
         result.put("summary", response.summary());
