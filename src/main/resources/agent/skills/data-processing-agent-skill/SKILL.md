@@ -236,8 +236,8 @@ accept_template_recognition(taskId, templateRecognitionResult)
 
 对每个需要字段绑定的规则源字段，只能使用以下三种状态之一：
 
-- `CONFIRMED`：可以唯一确定映射到某个 Excel 原始列。
-- `NEEDS_CONFIRMATION`：存在多个语义相近候选列，无法唯一判断。
+- `EXACT_MAPPING`：明确映射，可以唯一确定映射到某个 Excel 原始列。
+- `FUZZY_MAPPING`：模糊映射，存在多个语义相近候选列，无法唯一判断，需要前端用户确认。
 - `MISSING`：没有可靠可映射列。
 
 字段绑定计划结构如下：
@@ -249,9 +249,9 @@ accept_template_recognition(taskId, templateRecognitionResult)
       "targetColumn": "目标列",
       "ruleType": "DIRECT_MAPPING 或 EXPR",
       "sourceColumn": "加工规则 sourceColumns 中的规则源字段",
-      "status": "CONFIRMED 或 NEEDS_CONFIRMATION 或 MISSING",
-      "selectedHeader": "仅 CONFIRMED 时填写，必须是 Excel 原始表头",
-      "candidateHeaders": ["仅 NEEDS_CONFIRMATION 时填写，至少两个 Excel 原始表头"],
+      "status": "EXACT_MAPPING 或 FUZZY_MAPPING 或 MISSING",
+      "selectedHeader": "仅 EXACT_MAPPING 时填写，必须是 Excel 原始表头",
+      "candidateHeaders": ["仅 FUZZY_MAPPING 时填写，至少两个 Excel 原始表头"],
       "reason": "简短中文原因"
     }
   ]
@@ -263,7 +263,7 @@ accept_template_recognition(taskId, templateRecognitionResult)
 - `FieldBindingPlan.items` 必须覆盖加工规则中所有 `DIRECT_MAPPING` 和 `EXPR` 规则声明的全部 `sourceColumns`。
 - `FieldBindingPlan.items` 不得包含 `USER_CONFIRM_OPTION` 或 `USER_CONFIRM_INPUT` 对应的目标列取值确认。
 - 所有 `selectedHeader` 和 `candidateHeaders` 必须来自本次 Excel 的 `sourceHeaders`。
-- 如果语义不确定，必须使用 `NEEDS_CONFIRMATION`，不得强行选择。
+- 如果语义不确定，必须使用 `FUZZY_MAPPING`，不得强行选择。
 - 如果没有可靠候选列，必须使用 `MISSING`，不得编造列名。
 
 ### 第 4 步：提交字段绑定计划
@@ -278,7 +278,7 @@ accept_field_binding_plan(taskId, fieldBindingPlan)
 
 - 校验字段绑定计划。
 - 保存字段绑定计划。
-- 根据 `NEEDS_CONFIRMATION` 生成字段映射确认项。
+- 根据 `FUZZY_MAPPING` 生成字段映射确认项。
 - 根据 `USER_CONFIRM_OPTION` 规则生成值集选择确认项。
 - 根据 `USER_CONFIRM_INPUT` 规则生成手工输入确认项。
 - 检查标准模板必填字段：如果没有可靠映射列，生成手工输入确认项。
@@ -387,7 +387,6 @@ Agent 只能生成目标列表达式级 SQL 片段，不得生成完整 SQL。
   "columns": [
     {
       "targetColumn": "目标列",
-      "operation": "DIRECT_MAPPING 或 CONSTANT 或 CASE_WHEN",
       "actualColumnMappings": [
         {
           "actualColumn": "Excel 原始列",
@@ -411,11 +410,16 @@ Agent 只能生成目标列表达式级 SQL 片段，不得生成完整 SQL。
 
 表达式规则：
 
+Agent 必须作为 DWS SQL 表达式片段专家工作。生成 `expressionSql` 前，必须先理解 `ruleGuide`、`example`、字段类型说明、用户确认值和字段映射关系，再选择符合 DWS 语法的最小必要标量表达式。不得机械套用固定模板，也不得为了满足格式人为制造无意义条件分支。
+
 - 对于必填字段手工输入确认结果，`expressionSql` 必须是用户输入值对应的 SQL 字面量，整列全量覆盖。
 - 对于 `USER_CONFIRM_INPUT`，`expressionSql` 必须是用户输入值对应的 SQL 字面量。
 - 对于 `USER_CONFIRM_OPTION`，`expressionSql` 必须是用户选择值对应的 SQL 字面量。
 - 对于 `DIRECT_MAPPING`，`expressionSql` 必须等于对应的 `elasticColumn`。
-- 对于 `EXPR`，`expressionSql` 只能引用当前规则允许的 `elasticColumn`，不能引用 Excel 原始表头。
+- 对于 `EXPR`，`expressionSql` 必须根据 `ruleGuide` 和 `example` 表达的加工意图生成；`EXPR` 不等于 `CASE WHEN`，只有存在真实条件分支、枚举映射或区间判断时才使用 `CASE WHEN`。
+- 对于数值处理、日期处理、字符串处理、空值处理、类型转换、多字段拼接等非条件分支加工，必须选择 DWS 中合适的标量函数或表达式，直接生成最小必要表达式。
+- `example` 是语义参考，不是可直接照抄的 SQL；如果 `example` 中出现 Excel 原始表头或加工规则源字段，必须替换为对应的 `elasticColumn`。
+- `expressionSql` 只能引用当前规则允许的 `elasticColumn`，不能引用 Excel 原始表头。
 - 如果某个目标列无法根据规则、字段映射和用户确认结果生成，必须调用 `mark_task_failed`，不得编造表达式。
 
 SQL 安全规则：

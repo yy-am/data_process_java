@@ -4,7 +4,6 @@ import com.example.dataprocess.domain.model.ActualColumnMapping;
 import com.example.dataprocess.domain.model.DslGenerationContext;
 import com.example.dataprocess.domain.model.ProcessingPlanColumn;
 import com.example.dataprocess.domain.model.ProcessingPlanDsl;
-import com.example.dataprocess.domain.model.ProcessingPlanOperation;
 import com.example.dataprocess.domain.model.TargetColumnGenerationContext;
 import org.springframework.stereotype.Service;
 
@@ -115,19 +114,15 @@ public class ProcessingPlanDslValidator {
     }
 
     /**
-     * 校验单个目标列的表达式片段、操作类型和字段引用范围。
+     * 校验单个目标列的表达式片段和字段引用范围。
      */
     private void validateColumn(ProcessingPlanColumn column, TargetColumnGenerationContext targetContext) {
-        if (column.operation() == null) {
-            throw new IllegalStateException("目标列缺少加工操作类型: " + column.targetColumn());
-        }
         requireNonBlank(column.expressionSql(), "目标列缺少 SQL 表达式片段: " + column.targetColumn());
         validateExpressionSafety(column);
 
         Set<String> allowedElasticColumns = extractElasticColumns(targetContext.actualColumnMappings());
         validateElasticColumnScope(column, allowedElasticColumns);
         validateActualColumnNotUsed(column, targetContext.actualColumnMappings());
-        validateOperationShape(column, allowedElasticColumns);
     }
 
     /**
@@ -176,29 +171,6 @@ public class ProcessingPlanDslValidator {
     }
 
     /**
-     * 按操作类型做形态校验，避免 DIRECT_MAPPING、CONSTANT、CASE_WHEN 的边界混在一起。
-     */
-    private void validateOperationShape(ProcessingPlanColumn column, Set<String> allowedElasticColumns) {
-        if (column.operation() == ProcessingPlanOperation.DIRECT_MAPPING) {
-            if (!allowedElasticColumns.contains(normalizeIdentifier(column.expressionSql().trim()))) {
-                throw new IllegalStateException("DIRECT_MAPPING 表达式必须等于一个允许的弹性域字段: " + column.targetColumn());
-            }
-            return;
-        }
-
-        if (column.operation() == ProcessingPlanOperation.CONSTANT) {
-            if (ELASTIC_COLUMN_PATTERN.matcher(column.expressionSql()).find()) {
-                throw new IllegalStateException("CONSTANT 表达式不能引用弹性域字段: " + column.targetColumn());
-            }
-            return;
-        }
-
-        if (column.operation() == ProcessingPlanOperation.CASE_WHEN && !isCaseWhenExpression(column.expressionSql())) {
-            throw new IllegalStateException("CASE_WHEN 表达式必须包含 CASE/WHEN/THEN/END: " + column.targetColumn());
-        }
-    }
-
-    /**
      * 提取当前目标列允许使用的弹性域字段名。
      */
     private Set<String> extractElasticColumns(List<ActualColumnMapping> mappings) {
@@ -207,17 +179,6 @@ public class ProcessingPlanDslValidator {
                 .filter(value -> !isBlank(value))
                 .map(this::normalizeIdentifier)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
-    }
-
-    /**
-     * 判断表达式是否具备 CASE WHEN 的基本结构。
-     */
-    private boolean isCaseWhenExpression(String expressionSql) {
-        String upper = expressionSql.toUpperCase(Locale.ROOT);
-        return containsWord(upper, "CASE")
-                && containsWord(upper, "WHEN")
-                && containsWord(upper, "THEN")
-                && containsWord(upper, "END");
     }
 
     /**
@@ -235,13 +196,6 @@ public class ProcessingPlanDslValidator {
             return false;
         }
         return Pattern.compile("(?i)\\b" + Pattern.quote(actualColumn) + "\\b").matcher(expressionSql).find();
-    }
-
-    /**
-     * 判断大写 SQL 文本中是否包含独立单词。
-     */
-    private boolean containsWord(String upperExpressionSql, String word) {
-        return Pattern.compile("\\b" + Pattern.quote(word) + "\\b").matcher(upperExpressionSql).find();
     }
 
     /**
