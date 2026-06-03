@@ -89,42 +89,42 @@ public class FieldBindingValidationTool {
         }
 
         return switch (item.status()) {
-            case EXACT_MAPPING -> validateExactMapping(item, candidateHeaders);
-            case FUZZY_MAPPING -> validateFuzzyMapping(item, candidateHeaders);
+            case CONFIRMED -> validateConfirmed(item, candidateHeaders);
+            case NEEDS_CONFIRMATION -> validateNeedsConfirmation(item, candidateHeaders);
             case MISSING -> validateMissing(item, candidateHeaders);
         };
     }
 
-    private FieldBindingItem validateExactMapping(FieldBindingItem item, List<String> candidateHeaders) {
+    private FieldBindingItem validateConfirmed(FieldBindingItem item, List<String> candidateHeaders) {
         if (item.selectedHeader() == null || item.selectedHeader().isBlank()) {
-            throw new IllegalArgumentException("EXACT_MAPPING 字段绑定必须包含 selectedHeader。");
+            throw new IllegalArgumentException("CONFIRMED 字段绑定必须包含 selectedHeader。");
         }
         if (!candidateHeaders.isEmpty()) {
-            throw new IllegalArgumentException("EXACT_MAPPING 字段绑定不能包含 candidateHeaders。");
+            throw new IllegalArgumentException("CONFIRMED 字段绑定不能包含 candidateHeaders。");
         }
         return new FieldBindingItem(
                 item.targetColumn(),
                 item.ruleType(),
                 item.sourceColumn(),
-                FieldBindingStatus.EXACT_MAPPING,
+                FieldBindingStatus.CONFIRMED,
                 item.selectedHeader(),
                 List.of(),
                 item.reason()
         );
     }
 
-    private FieldBindingItem validateFuzzyMapping(FieldBindingItem item, List<String> candidateHeaders) {
+    private FieldBindingItem validateNeedsConfirmation(FieldBindingItem item, List<String> candidateHeaders) {
         if (item.selectedHeader() != null) {
-            throw new IllegalArgumentException("FUZZY_MAPPING 字段绑定不能包含 selectedHeader。");
+            throw new IllegalArgumentException("NEEDS_CONFIRMATION 字段绑定不能包含 selectedHeader。");
         }
         if (candidateHeaders.size() < 2) {
-            throw new IllegalArgumentException("FUZZY_MAPPING 字段绑定至少需要两个 candidateHeaders。");
+            throw new IllegalArgumentException("NEEDS_CONFIRMATION 字段绑定至少需要两个 candidateHeaders。");
         }
         return new FieldBindingItem(
                 item.targetColumn(),
                 item.ruleType(),
                 item.sourceColumn(),
-                FieldBindingStatus.FUZZY_MAPPING,
+                FieldBindingStatus.NEEDS_CONFIRMATION,
                 null,
                 candidateHeaders,
                 item.reason()

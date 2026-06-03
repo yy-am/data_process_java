@@ -8,9 +8,8 @@
 2. 删除 `ProcessingPlanOperation` 枚举。
 3. 移除 `ProcessingPlanDslValidator` 中基于 `operation` 的形态校验。
 4. 保留现有 SQL 安全边界校验，不新增 `CASE WHEN 1=1`、`CASE WHEN TRUE` 等低质量表达式校验。
-5. 将 Agent 字段绑定状态从 `CONFIRMED / NEEDS_CONFIRMATION / MISSING` 调整为更明确的 `EXACT_MAPPING / FUZZY_MAPPING / MISSING`。
-6. 修改 `SKILL.md` 中字段绑定计划的状态说明。
-7. 修改 `SKILL.md` 中第 8 步 SQL 片段生成提示词，强化 DWS SQL 表达式专家角色。
+5. 保持 Agent 字段绑定状态 `CONFIRMED / NEEDS_CONFIRMATION / MISSING` 不变，避免影响字段绑定校验、确认项生成和后续 SQL 上下文。
+6. 修改 `SKILL.md` 中第 8 步 SQL 片段生成提示词，强化 DWS SQL 表达式专家角色。
 8. 不修改已废弃的 `processing-plan-dsl-prompt.md`。
 9. 不生成测试用例。
 10. 生成本变更说明文档，并提交远程 Git。
@@ -91,9 +90,9 @@ public record ProcessingPlanColumn(
 - 不新增 `CASE WHEN TRUE` 校验。
 - 不新增低质量表达式专门校验。
 
-## 字段绑定状态变化
+## 字段绑定状态
 
-调整前：
+本次最终不修改 `FieldBindingStatus` 枚举值，继续使用：
 
 ```java
 public enum FieldBindingStatus {
@@ -103,60 +102,18 @@ public enum FieldBindingStatus {
 }
 ```
 
-调整后：
-
-```java
-public enum FieldBindingStatus {
-    EXACT_MAPPING,
-    FUZZY_MAPPING,
-    MISSING
-}
-```
-
 语义说明：
 
-- `EXACT_MAPPING`：明确映射，可以唯一确定 Excel 原始列。
-- `FUZZY_MAPPING`：模糊映射，存在多个候选列，需要前端用户确认。
+- `CONFIRMED`：明确映射，可以唯一确定 Excel 原始列。
+- `NEEDS_CONFIRMATION`：模糊映射，存在多个候选列，需要前端用户确认。
 - `MISSING`：缺失映射，没有可靠可映射列。
 
-相关修改：
+保留原枚举值的原因：
 
-- `FieldBindingValidationTool`
-  - 校验 `EXACT_MAPPING` 必须包含 `selectedHeader`，不能包含 `candidateHeaders`。
-  - 校验 `FUZZY_MAPPING` 必须包含至少两个 `candidateHeaders`，不能包含 `selectedHeader`。
-- `ConfirmationTool`
-  - 仅对 `FUZZY_MAPPING` 生成字段映射确认项。
-  - 必填字段空值检查仅使用 `EXACT_MAPPING` 的 `selectedHeader`。
-- `DataProcessingAgentToolMethods`
-  - 解析字段绑定时，`EXACT_MAPPING` 直接使用 `selectedHeader`。
-  - `FUZZY_MAPPING` 从用户确认结果中读取最终选择。
-
-## Skill 字段绑定计划变化
-
-`SKILL.md` 中字段绑定计划状态从：
-
-```text
-CONFIRMED 或 NEEDS_CONFIRMATION 或 MISSING
-```
-
-调整为：
-
-```text
-EXACT_MAPPING 或 FUZZY_MAPPING 或 MISSING
-```
-
-这样前端查看 `fieldBindingPlan.items[].status` 时，可以直接理解：
-
-- 明确映射
-- 模糊映射
-- 缺失映射
-
-`ruleType` 仍然保留加工规则类型语义，例如：
-
-- `DIRECT_MAPPING`
-- `EXPR`
-
-`status` 表达字段绑定状态，`ruleType` 表达加工规则类型，两者不混用。
+- `FieldBindingValidationTool` 依赖该枚举做字段绑定形态校验。
+- `ConfirmationTool` 依赖 `NEEDS_CONFIRMATION` 生成字段映射确认项。
+- `DataProcessingAgentToolMethods` 依赖该枚举在 SQL 上下文中解析最终选中的字段。
+- 改名会影响模型工具入参、状态恢复和前端确认链路，因此本次不作为 DSL 简化的一部分处理。
 
 ## Skill SQL 片段生成提示变化
 
@@ -207,6 +164,6 @@ src/main/resources/prompts/processing-plan-dsl-prompt.md
 
 ## 验证情况
 
-- 已执行静态扫描，目标代码和 `SKILL.md` 中不再包含 `ProcessingPlanOperation`、`operation()`、`"operation"` 以及 Agent 字段绑定旧状态 `CONFIRMED / NEEDS_CONFIRMATION`。
+- 已执行静态扫描，目标代码和 `SKILL.md` 中不再包含 `ProcessingPlanOperation`、`operation()`、`"operation"`。
 - 已执行 `git diff --check`，本次目标文件未发现空白格式问题。
 - 已执行 `mvn -q -DskipTests compile`，当前仍被已废弃 workflow 文件 `DataProcessingStateGraphDefinition.java` 的既有语法错误阻断；本次未修改 workflow。

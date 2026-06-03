@@ -43,7 +43,7 @@ public class ConfirmationTool {
         List<AgentConfirmationItem> items = new ArrayList<>();
 
         for (FieldBindingItem bindingItem : state.fieldBindingPlan().items()) {
-            if (bindingItem.status() == FieldBindingStatus.FUZZY_MAPPING) {
+            if (bindingItem.status() == FieldBindingStatus.NEEDS_CONFIRMATION) {
                 items.add(mappingConfirmation(bindingItem));
             }
         }
@@ -156,7 +156,7 @@ public class ConfirmationTool {
             }
 
             List<String> selectedHeaders = bindings.stream()
-                    .filter(item -> item.status() == FieldBindingStatus.EXACT_MAPPING)
+                    .filter(item -> item.status() == FieldBindingStatus.CONFIRMED)
                     .map(FieldBindingItem::selectedHeader)
                     .filter(value -> value != null && !value.isBlank())
                     .distinct()

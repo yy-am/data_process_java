@@ -603,10 +603,10 @@ public class DataProcessingAgentToolMethods {
     }
 
     private String selectedHeader(FieldBindingItem binding, List<AgentConfirmationDecision> decisions) {
-        if (binding.status() == FieldBindingStatus.EXACT_MAPPING) {
+        if (binding.status() == FieldBindingStatus.CONFIRMED) {
             return binding.selectedHeader();
         }
-        if (binding.status() == FieldBindingStatus.FUZZY_MAPPING) {
+        if (binding.status() == FieldBindingStatus.NEEDS_CONFIRMATION) {
             return safeDecisions(decisions).stream()
                     .filter(decision -> decision.confirmationType() == ConfirmationType.MAPPING_CONFIRMATION)
                     .filter(decision -> binding.targetColumn().equals(decision.targetColumn()))

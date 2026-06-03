@@ -236,8 +236,8 @@ accept_template_recognition(taskId, templateRecognitionResult)
 
 对每个需要字段绑定的规则源字段，只能使用以下三种状态之一：
 
-- `EXACT_MAPPING`：明确映射，可以唯一确定映射到某个 Excel 原始列。
-- `FUZZY_MAPPING`：模糊映射，存在多个语义相近候选列，无法唯一判断，需要前端用户确认。
+- `CONFIRMED`：可以唯一确定映射到某个 Excel 原始列。
+- `NEEDS_CONFIRMATION`：存在多个语义相近候选列，无法唯一判断。
 - `MISSING`：没有可靠可映射列。
 
 字段绑定计划结构如下：
@@ -249,9 +249,9 @@ accept_template_recognition(taskId, templateRecognitionResult)
       "targetColumn": "目标列",
       "ruleType": "DIRECT_MAPPING 或 EXPR",
       "sourceColumn": "加工规则 sourceColumns 中的规则源字段",
-      "status": "EXACT_MAPPING 或 FUZZY_MAPPING 或 MISSING",
-      "selectedHeader": "仅 EXACT_MAPPING 时填写，必须是 Excel 原始表头",
-      "candidateHeaders": ["仅 FUZZY_MAPPING 时填写，至少两个 Excel 原始表头"],
+      "status": "CONFIRMED 或 NEEDS_CONFIRMATION 或 MISSING",
+      "selectedHeader": "仅 CONFIRMED 时填写，必须是 Excel 原始表头",
+      "candidateHeaders": ["仅 NEEDS_CONFIRMATION 时填写，至少两个 Excel 原始表头"],
       "reason": "简短中文原因"
     }
   ]
@@ -263,7 +263,7 @@ accept_template_recognition(taskId, templateRecognitionResult)
 - `FieldBindingPlan.items` 必须覆盖加工规则中所有 `DIRECT_MAPPING` 和 `EXPR` 规则声明的全部 `sourceColumns`。
 - `FieldBindingPlan.items` 不得包含 `USER_CONFIRM_OPTION` 或 `USER_CONFIRM_INPUT` 对应的目标列取值确认。
 - 所有 `selectedHeader` 和 `candidateHeaders` 必须来自本次 Excel 的 `sourceHeaders`。
-- 如果语义不确定，必须使用 `FUZZY_MAPPING`，不得强行选择。
+- 如果语义不确定，必须使用 `NEEDS_CONFIRMATION`，不得强行选择。
 - 如果没有可靠候选列，必须使用 `MISSING`，不得编造列名。
 
 ### 第 4 步：提交字段绑定计划
@@ -278,7 +278,7 @@ accept_field_binding_plan(taskId, fieldBindingPlan)
 
 - 校验字段绑定计划。
 - 保存字段绑定计划。
-- 根据 `FUZZY_MAPPING` 生成字段映射确认项。
+- 根据 `NEEDS_CONFIRMATION` 生成字段映射确认项。
 - 根据 `USER_CONFIRM_OPTION` 规则生成值集选择确认项。
 - 根据 `USER_CONFIRM_INPUT` 规则生成手工输入确认项。
 - 检查标准模板必填字段：如果没有可靠映射列，生成手工输入确认项。
