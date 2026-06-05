@@ -89,13 +89,17 @@ public class FieldBindingValidationTool {
         }
 
         return switch (item.status()) {
-            case CONFIRMED -> validateConfirmed(item, candidateHeaders);
-            case NEEDS_CONFIRMATION -> validateNeedsConfirmation(item, candidateHeaders);
-            case MISSING -> validateMissing(item, candidateHeaders);
+            case CONFIRMED -> validateConfirmed(item, ruleItem, candidateHeaders);
+            case NEEDS_CONFIRMATION -> validateNeedsConfirmation(item, ruleItem, candidateHeaders);
+            case MISSING -> validateMissing(item, ruleItem, candidateHeaders);
         };
     }
 
-    private FieldBindingItem validateConfirmed(FieldBindingItem item, List<String> candidateHeaders) {
+    private FieldBindingItem validateConfirmed(
+            FieldBindingItem item,
+            ProcessingRuleItem ruleItem,
+            List<String> candidateHeaders
+    ) {
         if (item.selectedHeader() == null || item.selectedHeader().isBlank()) {
             throw new IllegalArgumentException("CONFIRMED 字段绑定必须包含 selectedHeader。");
         }
@@ -106,6 +110,7 @@ public class FieldBindingValidationTool {
                 item.targetColumn(),
                 item.ruleType(),
                 item.sourceColumn(),
+                resolveBindingDisplayName(item, ruleItem),
                 FieldBindingStatus.CONFIRMED,
                 item.selectedHeader(),
                 List.of(),
@@ -113,7 +118,11 @@ public class FieldBindingValidationTool {
         );
     }
 
-    private FieldBindingItem validateNeedsConfirmation(FieldBindingItem item, List<String> candidateHeaders) {
+    private FieldBindingItem validateNeedsConfirmation(
+            FieldBindingItem item,
+            ProcessingRuleItem ruleItem,
+            List<String> candidateHeaders
+    ) {
         if (item.selectedHeader() != null) {
             throw new IllegalArgumentException("NEEDS_CONFIRMATION 字段绑定不能包含 selectedHeader。");
         }
@@ -124,6 +133,7 @@ public class FieldBindingValidationTool {
                 item.targetColumn(),
                 item.ruleType(),
                 item.sourceColumn(),
+                resolveBindingDisplayName(item, ruleItem),
                 FieldBindingStatus.NEEDS_CONFIRMATION,
                 null,
                 candidateHeaders,
@@ -131,7 +141,11 @@ public class FieldBindingValidationTool {
         );
     }
 
-    private FieldBindingItem validateMissing(FieldBindingItem item, List<String> candidateHeaders) {
+    private FieldBindingItem validateMissing(
+            FieldBindingItem item,
+            ProcessingRuleItem ruleItem,
+            List<String> candidateHeaders
+    ) {
         if (item.selectedHeader() != null) {
             throw new IllegalArgumentException("MISSING 字段绑定不能包含 selectedHeader。");
         }
@@ -142,6 +156,7 @@ public class FieldBindingValidationTool {
                 item.targetColumn(),
                 item.ruleType(),
                 item.sourceColumn(),
+                resolveBindingDisplayName(item, ruleItem),
                 FieldBindingStatus.MISSING,
                 null,
                 List.of(),
@@ -151,5 +166,18 @@ public class FieldBindingValidationTool {
 
     private String key(ProcessingRuleItem item, String sourceColumn) {
         return item.targetColumn() + "|" + item.ruleType() + "|" + sourceColumn;
+    }
+
+    private String resolveBindingDisplayName(FieldBindingItem item, ProcessingRuleItem ruleItem) {
+        if (item.bindingDisplayName() != null && !item.bindingDisplayName().isBlank()) {
+            return item.bindingDisplayName();
+        }
+        if ("EXPR".equals(ruleItem.ruleType())
+                && ruleItem.sourceColumns().size() > 1
+                && ruleItem.ruleGuide() != null
+                && !ruleItem.ruleGuide().isBlank()) {
+            return ruleItem.ruleGuide();
+        }
+        return item.sourceColumn();
     }
 }

@@ -249,6 +249,7 @@ accept_template_recognition(taskId, templateRecognitionResult)
       "targetColumn": "目标列",
       "ruleType": "DIRECT_MAPPING 或 EXPR",
       "sourceColumn": "加工规则 sourceColumns 中的规则源字段",
+      "bindingDisplayName": "给前端展示的规则源名称或规则说明",
       "status": "CONFIRMED 或 NEEDS_CONFIRMATION 或 MISSING",
       "selectedHeader": "仅 CONFIRMED 时填写，必须是 Excel 原始表头",
       "candidateHeaders": ["仅 NEEDS_CONFIRMATION 时填写，至少两个 Excel 原始表头"],
@@ -265,6 +266,10 @@ accept_template_recognition(taskId, templateRecognitionResult)
 - 所有 `selectedHeader` 和 `candidateHeaders` 必须来自本次 Excel 的 `sourceHeaders`。
 - 如果语义不确定，必须使用 `NEEDS_CONFIRMATION`，不得强行选择。
 - 如果没有可靠候选列，必须使用 `MISSING`，不得编造列名。
+- `sourceColumn` 必须始终等于加工规则 `sourceColumns` 中声明的单个源字段，不得写入 `ruleGuide`、表达式说明或多个源字段拼接文本。
+- `bindingDisplayName` 仅用于前端展示，不参与字段绑定唯一性判断。
+- 如果 `EXPR` 规则的同一目标列依赖多个 `sourceColumns`，并且加工规则中存在 `ruleGuide`，则该目标列下每个 `FieldBindingItem.bindingDisplayName` 使用 `ruleGuide`。
+- 如果是 `DIRECT_MAPPING`，或只是日期格式化、数值处理等单一原始列加工，`bindingDisplayName` 使用对应的 `sourceColumn`。
 
 ### 第 4 步：提交字段绑定计划
 
@@ -300,7 +305,7 @@ accept_field_binding_plan(taskId, fieldBindingPlan)
 
 - `accept_field_binding_plan` 返回 `USER_CONFIRMATION_REQUIRED` 时，工具已经完成 `fieldBindingPlan` 和 `confirmationItems` 的保存，最终响应必须原样保留工具返回的 `fieldBindingPlan` 和 `confirmationItems`。
 - 最终响应中的 `confirmationItems` 必须完整包含字段映射确认、值集选择确认和手工输入确认，不得因为内容较长而省略、摘要、改名或置空。
-- 字段明确映射和模糊映射来自已保存的 `fieldBindingPlan`；字段映射确认、值集选择确认和手工输入确认来自已保存的 `confirmationItems`。这些结构供前端展示确认页面使用。
+- 字段明确映射和模糊映射来自已保存的 `fieldBindingPlan`；前端展示字段绑定来源时优先使用 `bindingDisplayName`，内部定位和后续加工仍使用 `sourceColumn`。字段映射确认、值集选择确认和手工输入确认来自已保存的 `confirmationItems`。这些结构供前端展示确认页面使用。
 - 如果存在任何待用户确认项，最终响应阶段必须是 `USER_CONFIRMATION_REQUIRED`，不得继续调用确认后工具。
 
 ### 第 5 步：处理用户确认提交

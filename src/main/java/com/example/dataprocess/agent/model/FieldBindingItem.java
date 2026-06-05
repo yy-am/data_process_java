@@ -9,6 +9,7 @@ public record FieldBindingItem(
         String targetColumn,
         String ruleType,
         String sourceColumn,
+        String bindingDisplayName,
         FieldBindingStatus status,
         String selectedHeader,
         List<String> candidateHeaders,
