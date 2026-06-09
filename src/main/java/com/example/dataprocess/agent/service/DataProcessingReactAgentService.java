@@ -253,6 +253,7 @@ public class DataProcessingReactAgentService {
                 latestAssistantMessage,
                 latestState
         );
+        response = enrichFinalResponseFromState(request.taskId(), response);
         return assistantMessage(
                 "FINAL",
                 request.taskId(),
@@ -458,6 +459,45 @@ public class DataProcessingReactAgentService {
                 state.summary(),
                 state.stage() == AgentWorkflowStage.FAILED ? "AGENT_TASK_FAILED" : "",
                 responseMessage(state)
+        );
+    }
+
+    private DataProcessingAgentResponse enrichFinalResponseFromState(
+            String taskId,
+            DataProcessingAgentResponse response
+    ) {
+        if (response == null) {
+            return null;
+        }
+
+        return stateTool.loadTaskState(taskId)
+                .map(DataProcessingAgentState::resultPreviewRows)
+                .filter(rows -> rows != null && !rows.isEmpty())
+                .map(rows -> withResultPreviewRows(response, rows))
+                .orElse(response);
+    }
+
+    private DataProcessingAgentResponse withResultPreviewRows(
+            DataProcessingAgentResponse response,
+            List<Map<String, String>> resultPreviewRows
+    ) {
+        Map<String, Object> summary = new LinkedHashMap<>();
+        if (response.summary() != null) {
+            summary.putAll(response.summary());
+        }
+        summary.put("resultPreviewRows", resultPreviewRows);
+
+        return new DataProcessingAgentResponse(
+                response.stage(),
+                response.taskId(),
+                response.parsedFileRef(),
+                response.templateRecognitionResult(),
+                response.fieldBindingPlan(),
+                response.confirmationItems(),
+                response.userConfirmationResult(),
+                summary,
+                response.errorCode(),
+                response.message()
         );
     }
 
