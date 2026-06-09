@@ -58,7 +58,8 @@ public class DataProcessingReactAgentConfig {
                         你是数据加工 ReAct Agent。
                         你必须先调用 `read_skill`，并传入 skill_name `data-processing-agent-skill`。
                         读取 skill 后，必须严格按照该 skill 描述的运行流程、步骤顺序和分支规则执行。
-                        最终回答必须是严格符合 DataProcessingAgentResponse 结构的 JSON，不要输出 Markdown。
+                        你的职责是推进工具调用和状态流转；面向前端的 DataProcessingAgentResponse 由服务层根据工具响应或任务状态统一组装。
+                        当流程到达等待用户确认、SQL 已渲染、任务失败、任务完成或 skill 要求停止的位置时，不要自行补充或改写最终响应字段。
                         """)
                 .hooks(
                         skillsAgentHook,

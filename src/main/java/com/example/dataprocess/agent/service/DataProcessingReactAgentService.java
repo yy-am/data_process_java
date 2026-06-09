@@ -126,7 +126,8 @@ public class DataProcessingReactAgentService {
                 如果需要用户确认，保存状态并返回 USER_CONFIRMATION_REQUIRED。
                 如果用户确认已完成或无需用户确认，继续按照 skill 完成后续数据加工流程。
 
-                最终必须只输出 DataProcessingAgentResponse JSON，不能输出 Markdown 或解释文字。
+                你的职责是推进工具调用和任务状态；最终返回给前端的 DataProcessingAgentResponse 由服务层根据工具响应或任务状态统一组装。
+                当流程到达等待用户确认、SQL 已渲染、任务失败、任务完成或 skill 要求停止的位置时，不要自行补充或改写最终响应字段。
 
                 本次输入 JSON：
                 %s
