@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
+import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicLong;
@@ -80,6 +81,7 @@ public class DataProcessingAgentInterface {
         );
 
         Disposable subscription = agentService.run(request)
+                .subscribeOn(Schedulers.boundedElastic())
                 .doOnSubscribe(ignoredSubscription -> log.info(
                         "Agent SSE stream subscribed, taskId={}",
                         taskId
