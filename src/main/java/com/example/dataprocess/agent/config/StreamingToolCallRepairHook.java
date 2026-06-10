@@ -3,7 +3,6 @@ package com.example.dataprocess.agent.config;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.hook.HookPosition;
 import com.alibaba.cloud.ai.graph.agent.hook.HookPositions;
-import com.alibaba.cloud.ai.graph.agent.hook.JumpTo;
 import com.alibaba.cloud.ai.graph.agent.hook.messages.AgentCommand;
 import com.alibaba.cloud.ai.graph.agent.hook.messages.MessagesModelHook;
 import org.slf4j.Logger;
@@ -39,38 +38,29 @@ public class StreamingToolCallRepairHook extends MessagesModelHook {
     }
 
     @Override
-    public List<JumpTo> canJumpTo() {
-        return List.of(JumpTo.model, JumpTo.tool);
-    }
-
-    @Override
     public AgentCommand beforeModel(List<Message> previousMessages, RunnableConfig config) {
-        return repairMessages(previousMessages, "beforeModel", false);
+        return repairMessages(previousMessages, "beforeModel");
     }
 
     @Override
     public AgentCommand afterModel(List<Message> currentMessages, RunnableConfig config) {
-        return repairMessages(currentMessages, "afterModel", true);
+        return repairMessages(currentMessages, "afterModel");
     }
 
-    private AgentCommand repairMessages(List<Message> messages, String phase, boolean allowRetryJump) {
+    private AgentCommand repairMessages(List<Message> messages, String phase) {
         ToolCallMessageValidator.ValidationResult result = toolCallMessageValidator.validate(messages);
         if (!result.changed()) {
             return new AgentCommand(messages);
         }
 
         log.warn(
-                "Repaired streaming tool calls in phase={}, originalToolCallCount={}, normalizedToolCallCount={}, requestModelRetry={}, detailCount={}",
+                "Repaired streaming tool calls in phase={}, originalToolCallCount={}, normalizedToolCallCount={}, syntheticToolResponseCount={}, detailCount={}",
                 phase,
                 result.originalToolCallCount(),
                 result.normalizedToolCallCount(),
-                result.requestModelRetry(),
+                result.syntheticToolResponseCount(),
                 result.details().size()
         );
-
-        if (allowRetryJump && result.requestModelRetry()) {
-            return new AgentCommand(JumpTo.model, result.messages());
-        }
         return new AgentCommand(result.messages());
     }
 }
