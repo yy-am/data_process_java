@@ -6,6 +6,8 @@ import com.alibaba.cloud.ai.graph.agent.hook.skills.SkillsAgentHook;
 import com.alibaba.cloud.ai.graph.agent.interceptor.toolerror.ToolErrorInterceptor;
 import com.alibaba.cloud.ai.graph.skills.registry.SkillRegistry;
 import com.alibaba.cloud.ai.graph.skills.registry.classpath.ClasspathSkillRegistry;
+import com.example.dataprocess.agent.service.AgentStreamEventPublisher;
+import com.example.dataprocess.agent.tool.AgentStateTool;
 import com.example.dataprocess.agent.tool.DataProcessingAgentToolMethods;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.support.ToolCallbacks;
@@ -36,7 +38,9 @@ public class DataProcessingReactAgentConfig {
     @Bean("dataProcessingReactAgent")
     public ReactAgent dataProcessingReactAgent(
             ChatModel chatModel,
-            DataProcessingAgentToolMethods toolMethods
+            DataProcessingAgentToolMethods toolMethods,
+            AgentStreamEventPublisher eventPublisher,
+            AgentStateTool stateTool
     ) {
         ToolCallback[] dataProcessingTools = ToolCallbacks.from(toolMethods);
         SkillRegistry skillRegistry = buildSkillRegistry();
@@ -68,6 +72,7 @@ public class DataProcessingReactAgentConfig {
                         ModelCallLimitHook.builder().runLimit(12).build()
                 )
                 .interceptors(
+                        new AgentExecutionToolStreamInterceptor(eventPublisher, stateTool),
                         new BlankToolInputNormalizingInterceptor(),
                         ToolErrorInterceptor.builder().build()
                 )

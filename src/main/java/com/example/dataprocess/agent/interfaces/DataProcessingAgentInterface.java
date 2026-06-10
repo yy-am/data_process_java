@@ -5,23 +5,27 @@ import com.example.dataprocess.agent.model.ParsedExcelFile;
 import com.example.dataprocess.agent.service.DataProcessingReactAgentService;
 import com.example.dataprocess.agent.tool.ParsedExcelFileTool;
 import com.example.dataprocess.interfaces.restful.request.DataProcessingTaskRequest;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import reactor.core.Disposable;
-import reactor.core.scheduler.Schedulers;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.io.IOException;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
+import java.io.OutputStreamWriter;
+import java.io.UncheckedIOException;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
 
 /**
  * REST entry points for the decoupled data-processing agent flow.
@@ -35,13 +39,16 @@ public class DataProcessingAgentInterface {
 
     private final ParsedExcelFileTool parsedExcelFileTool;
     private final DataProcessingReactAgentService agentService;
+    private final ObjectMapper objectMapper;
 
     public DataProcessingAgentInterface(
             ParsedExcelFileTool parsedExcelFileTool,
-            DataProcessingReactAgentService agentService
+            DataProcessingReactAgentService agentService,
+            ObjectMapper objectMapper
     ) {
         this.parsedExcelFileTool = parsedExcelFileTool;
         this.agentService = agentService;
+        this.objectMapper = objectMapper;
     }
 
     @PostMapping(value = "/parsed-files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
@@ -64,10 +71,7 @@ public class DataProcessingAgentInterface {
     }
 
     @PostMapping(value = "/run", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter run(@Valid @RequestBody DataProcessingTaskRequest request) {
-        SseEmitter emitter = new SseEmitter(0L);
-        AtomicLong sequence = new AtomicLong();
-        AtomicReference<Disposable> subscriptionRef = new AtomicReference<>();
+    public ResponseEntity<StreamingResponseBody> run(@Valid @RequestBody DataProcessingTaskRequest request) {
         String taskId = request.taskId();
         String inputType = request.inputType();
         int sourceHeaderCount = request.sourceHeaders() == null ? 0 : request.sourceHeaders().size();
@@ -80,57 +84,35 @@ public class DataProcessingAgentInterface {
                 sampleRowCount
         );
 
-        Disposable subscription = agentService.run(request)
-                .subscribeOn(Schedulers.boundedElastic())
-                .doOnSubscribe(ignoredSubscription -> log.info(
-                        "Agent SSE stream subscribed, taskId={}",
-                        taskId
-                ))
-                .subscribe(
-                        message -> emitMessage(emitter, taskId, sequence.incrementAndGet(), message),
-                        ex -> {
-                            log.error("Agent SSE stream failed, taskId={}", taskId, ex);
-                            emitter.completeWithError(ex);
-                        },
-                        () -> {
-                            log.info(
-                                    "Agent SSE stream completed, taskId={}, eventCount={}",
-                                    taskId,
-                                    sequence.get()
-                            );
-                            emitter.complete();
-                        }
-                );
-        subscriptionRef.set(subscription);
+        StreamingResponseBody body = outputStream -> {
+            try (Writer writer = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8)) {
+                long[] sequence = {0L};
+                log.info("Agent SSE stream subscribed, taskId={}", taskId);
 
-        emitter.onCompletion(() -> {
-            Disposable current = subscriptionRef.get();
-            if (current != null && !current.isDisposed()) {
-                current.dispose();
-            }
-            log.info("Agent SSE emitter completed, taskId={}, eventCount={}", taskId, sequence.get());
-        });
-        emitter.onTimeout(() -> {
-            Disposable current = subscriptionRef.get();
-            if (current != null && !current.isDisposed()) {
-                current.dispose();
-            }
-            log.warn("Agent SSE emitter timed out, taskId={}, eventCount={}", taskId, sequence.get());
-            emitter.complete();
-        });
-        emitter.onError(ex -> {
-            Disposable current = subscriptionRef.get();
-            if (current != null && !current.isDisposed()) {
-                current.dispose();
-            }
-            log.error("Agent SSE emitter failed, taskId={}, eventCount={}", taskId, sequence.get(), ex);
-        });
+                agentService.run(request)
+                        .doOnNext(event -> emitMessage(writer, taskId, ++sequence[0], event))
+                        .doOnError(ex -> log.error("Agent SSE stream failed, taskId={}", taskId, ex))
+                        .doOnComplete(() -> log.info(
+                                "Agent SSE stream completed, taskId={}, eventCount={}",
+                                taskId,
+                                sequence[0]
+                        ))
+                        .blockLast();
 
-        return emitter;
+                log.info("Agent SSE response body closed, taskId={}, eventCount={}", taskId, sequence[0]);
+            }
+        };
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.TEXT_EVENT_STREAM)
+                .header(HttpHeaders.CACHE_CONTROL, "no-cache")
+                .header(HttpHeaders.CONNECTION, "keep-alive")
+                .header("X-Accel-Buffering", "no")
+                .body(body);
     }
 
     private void emitMessage(
-            SseEmitter emitter,
+            Writer writer,
             String taskId,
             long sequence,
             DataProcessingAgentStreamEvent event
@@ -138,10 +120,10 @@ public class DataProcessingAgentInterface {
         String eventId = taskId + "-" + sequence;
         String eventName = event.event() == null || event.event().isBlank() ? "MESSAGE" : event.event();
         try {
-            emitter.send(SseEmitter.event()
-                    .id(eventId)
-                    .name(eventName)
-                    .data(event, MediaType.APPLICATION_JSON));
+            writer.write("id: " + eventId + "\n");
+            writer.write("event: " + eventName + "\n");
+            writer.write("data: " + writeEventJson(event) + "\n\n");
+            writer.flush();
             log.info(
                     "Agent SSE event emitted, taskId={}, id={}, event={}, stage={}, textLength={}, detailKeys={}",
                     taskId,
@@ -151,9 +133,17 @@ public class DataProcessingAgentInterface {
                     textLength(event),
                     event.detail() == null ? "[]" : event.detail().keySet()
             );
-        } catch (IOException | IllegalStateException ex) {
+        } catch (IOException ex) {
             log.error("Agent SSE event send failed, taskId={}, id={}, event={}", taskId, eventId, eventName, ex);
-            emitter.completeWithError(ex);
+            throw new UncheckedIOException(ex);
+        }
+    }
+
+    private String writeEventJson(DataProcessingAgentStreamEvent event) {
+        try {
+            return objectMapper.writeValueAsString(event);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Failed to serialize SSE event", ex);
         }
     }
 

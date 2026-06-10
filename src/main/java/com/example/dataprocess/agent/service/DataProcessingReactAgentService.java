@@ -15,10 +15,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Sinks;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,60 +38,86 @@ public class DataProcessingReactAgentService {
     private final ReactAgent dataProcessingReactAgent;
     private final AgentStateTool stateTool;
     private final ParsedExcelFileTool parsedExcelFileTool;
+    private final AgentStreamEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
 
     public DataProcessingReactAgentService(
             @Qualifier("dataProcessingReactAgent") ReactAgent dataProcessingReactAgent,
             AgentStateTool stateTool,
             ParsedExcelFileTool parsedExcelFileTool,
+            AgentStreamEventPublisher eventPublisher,
             ObjectMapper objectMapper
     ) {
         this.dataProcessingReactAgent = dataProcessingReactAgent;
         this.stateTool = stateTool;
         this.parsedExcelFileTool = parsedExcelFileTool;
+        this.eventPublisher = eventPublisher;
         this.objectMapper = objectMapper;
     }
 
     public Flux<DataProcessingAgentStreamEvent> run(DataProcessingTaskRequest request) {
         return Flux.defer(() -> {
             String parsedFileRef = ensureParsedFileRef(request);
+            String taskId = request.taskId();
             AtomicReference<AssistantMessage> latestAssistantMessage = new AtomicReference<>();
             RunnableConfig config = RunnableConfig.builder()
-                    .threadId(request.taskId())
+                    .threadId(taskId)
                     .addMetadata(AGENT_INTERNAL_MODEL_STREAMING_KEY, true)
                     .build();
+            Sinks.Many<DataProcessingAgentStreamEvent> outgoing = Sinks.many().unicast().onBackpressureBuffer();
+            Flux<DataProcessingAgentStreamEvent> toolEventStream = eventPublisher.createStream(taskId);
 
             Flux<Message> agentStream;
             try {
                 agentStream = dataProcessingReactAgent.streamMessages(buildAgentInstruction(request, parsedFileRef), config);
             } catch (Exception ex) {
-                return Flux.just(toStreamEvent(request.taskId(), toErrorMessage(request, parsedFileRef, ex)));
+                return Flux.just(toStreamEvent(taskId, toErrorMessage(request, parsedFileRef, ex)));
             }
 
-            return Flux.concat(
-                    Flux.just(assistantMessage(
-                            "START",
-                            request.taskId(),
-                            null,
-                            "数据加工 Agent 开始运行。",
-                            Map.of("parsedFileRef", parsedFileRef)
-                    )),
-                    agentStream.concatMap(message -> Flux.fromIterable(toAssistantMessages(
-                            request.taskId(),
-                            message,
-                            latestAssistantMessage
-                    ))),
-                    Flux.defer(() -> Flux.just(toFinalMessage(
-                            request,
-                            parsedFileRef,
-                            latestAssistantMessage.get()
-                    )))
-            )
-                    .map(message -> toStreamEvent(request.taskId(), message))
-                    .onErrorResume(ex -> Flux.just(toStreamEvent(
-                            request.taskId(),
-                            toErrorMessage(request, parsedFileRef, ex)
-                    )));
+            outgoing.tryEmitNext(toStreamEvent(taskId, assistantMessage(
+                    "START",
+                    taskId,
+                    null,
+                    "数据加工 Agent 开始运行。",
+                    Map.of("parsedFileRef", parsedFileRef)
+            )));
+
+            Disposable toolSubscription = toolEventStream.subscribe(
+                    outgoing::tryEmitNext,
+                    ex -> outgoing.tryEmitNext(toStreamEvent(taskId, toErrorMessage(request, parsedFileRef, ex)))
+            );
+
+            Disposable agentSubscription = agentStream
+                    .concatMap(message -> Flux.fromIterable(toAssistantMessages(taskId, message, latestAssistantMessage)))
+                    .map(message -> toStreamEvent(taskId, message))
+                    .subscribe(
+                            outgoing::tryEmitNext,
+                            ex -> {
+                                outgoing.tryEmitNext(toStreamEvent(taskId, toErrorMessage(request, parsedFileRef, ex)));
+                                eventPublisher.remove(taskId);
+                                outgoing.tryEmitComplete();
+                            },
+                            () -> {
+                                outgoing.tryEmitNext(toStreamEvent(taskId, toFinalMessage(
+                                        request,
+                                        parsedFileRef,
+                                        latestAssistantMessage.get()
+                                )));
+                                eventPublisher.complete(taskId);
+                                outgoing.tryEmitComplete();
+                            }
+                    );
+
+            return outgoing.asFlux()
+                    .doFinally(signalType -> {
+                        if (!toolSubscription.isDisposed()) {
+                            toolSubscription.dispose();
+                        }
+                        if (!agentSubscription.isDisposed()) {
+                            agentSubscription.dispose();
+                        }
+                        eventPublisher.remove(taskId);
+                    });
         }).onErrorResume(ex -> Flux.just(toStreamEvent(request.taskId(), toErrorMessage(request, null, ex))));
     }
 
@@ -160,10 +187,6 @@ public class DataProcessingReactAgentService {
             return assistantMessages(taskId, assistantMessage);
         }
 
-        if (message instanceof ToolResponseMessage toolResponseMessage) {
-            return List.of(toolResponseMessage(taskId, toolResponseMessage));
-        }
-
         return List.of();
     }
 
@@ -172,14 +195,7 @@ public class DataProcessingReactAgentService {
             AssistantMessage message
     ) {
         if (message.hasToolCalls()) {
-            return List.of(assistantMessage(
-                    "TOOL_CALL",
-                    taskId,
-                    null,
-                    textOrDefault(message, "模型请求调用工具。"),
-                    Map.of("toolCalls", message.getToolCalls()),
-                    message
-            ));
+            return List.of();
         }
 
         String text = message.getText();
@@ -194,22 +210,6 @@ public class DataProcessingReactAgentService {
             ));
         }
         return List.of();
-    }
-
-    private AssistantMessage toolResponseMessage(
-            String taskId,
-            ToolResponseMessage message
-    ) {
-        List<String> toolNames = message.getResponses().stream()
-                .map(ToolResponseMessage.ToolResponse::name)
-                .toList();
-        return assistantMessage(
-                "TOOL_RESULT",
-                taskId,
-                null,
-                "工具调用完成: " + String.join(", ", toolNames),
-                Map.of("toolNames", toolNames)
-        );
     }
 
     private AssistantMessage toFinalMessage(
@@ -362,11 +362,6 @@ public class DataProcessingReactAgentService {
             builder.media(source.getMedia());
         }
         return builder.build();
-    }
-
-    private String textOrDefault(AssistantMessage message, String defaultText) {
-        String text = message.getText();
-        return text == null || text.isBlank() ? defaultText : text;
     }
 
     private String writeJson(Object value) {
