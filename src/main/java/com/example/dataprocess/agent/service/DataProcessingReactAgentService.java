@@ -1,12 +1,7 @@
 package com.example.dataprocess.agent.service;
 
-import com.alibaba.cloud.ai.graph.NodeOutput;
-import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
-import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
-import com.alibaba.cloud.ai.graph.streaming.OutputType;
-import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.example.dataprocess.agent.model.AgentWorkflowStage;
 import com.example.dataprocess.agent.model.DataProcessingAgentResponse;
 import com.example.dataprocess.agent.model.DataProcessingAgentStreamEvent;
@@ -24,7 +19,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,15 +54,14 @@ public class DataProcessingReactAgentService {
         return Flux.defer(() -> {
             String parsedFileRef = ensureParsedFileRef(request);
             AtomicReference<AssistantMessage> latestAssistantMessage = new AtomicReference<>();
-            AtomicReference<OverAllState> latestState = new AtomicReference<>();
             RunnableConfig config = RunnableConfig.builder()
                     .threadId(request.taskId())
-                    .addMetadata(AGENT_INTERNAL_MODEL_STREAMING_KEY, false)
+                    .addMetadata(AGENT_INTERNAL_MODEL_STREAMING_KEY, true)
                     .build();
 
-            Flux<NodeOutput> agentStream;
+            Flux<Message> agentStream;
             try {
-                agentStream = dataProcessingReactAgent.stream(buildAgentInstruction(request, parsedFileRef), config);
+                agentStream = dataProcessingReactAgent.streamMessages(buildAgentInstruction(request, parsedFileRef), config);
             } catch (Exception ex) {
                 return Flux.just(toStreamEvent(request.taskId(), toErrorMessage(request, parsedFileRef, ex)));
             }
@@ -81,17 +74,15 @@ public class DataProcessingReactAgentService {
                             "数据加工 Agent 开始运行。",
                             Map.of("parsedFileRef", parsedFileRef)
                     )),
-                    agentStream.concatMap(output -> Flux.fromIterable(toAssistantMessages(
+                    agentStream.concatMap(message -> Flux.fromIterable(toAssistantMessages(
                             request.taskId(),
-                            output,
-                            latestAssistantMessage,
-                            latestState
+                            message,
+                            latestAssistantMessage
                     ))),
                     Flux.defer(() -> Flux.just(toFinalMessage(
                             request,
                             parsedFileRef,
-                            latestAssistantMessage.get(),
-                            latestState.get()
+                            latestAssistantMessage.get()
                     )))
             )
                     .map(message -> toStreamEvent(request.taskId(), message))
@@ -160,25 +151,16 @@ public class DataProcessingReactAgentService {
 
     private List<AssistantMessage> toAssistantMessages(
             String taskId,
-            NodeOutput output,
-            AtomicReference<AssistantMessage> latestAssistantMessage,
-            AtomicReference<OverAllState> latestState
+            Message message,
+            AtomicReference<AssistantMessage> latestAssistantMessage
     ) {
-        latestState.set(output.state());
-        latestAssistant(output.state()).ifPresent(latestAssistantMessage::set);
-
-        if (!(output instanceof StreamingOutput<?> streamingOutput)) {
-            return List.of();
-        }
-
-        Message message = streamingOutput.message();
         if (message instanceof AssistantMessage assistantMessage) {
             latestAssistantMessage.set(assistantMessage);
-            return assistantMessages(taskId, output.node(), streamingOutput, assistantMessage);
+            return assistantMessages(taskId, assistantMessage);
         }
 
         if (message instanceof ToolResponseMessage toolResponseMessage) {
-            return List.of(toolResponseMessage(taskId, output.node(), streamingOutput, toolResponseMessage));
+            return List.of(toolResponseMessage(taskId, toolResponseMessage));
         }
 
         return List.of();
@@ -186,44 +168,35 @@ public class DataProcessingReactAgentService {
 
     private List<AssistantMessage> assistantMessages(
             String taskId,
-            String node,
-            StreamingOutput<?> output,
             AssistantMessage message
     ) {
-        List<AssistantMessage> messages = new ArrayList<>();
         if (message.hasToolCalls()) {
-            messages.add(assistantMessage(
+            return List.of(assistantMessage(
                     "TOOL_CALL",
                     taskId,
-                    node,
+                    null,
                     textOrDefault(message, "模型请求调用工具。"),
-                    Map.of(
-                            "outputType", outputTypeName(output),
-                            "toolCalls", message.getToolCalls()
-                    ),
+                    Map.of("toolCalls", message.getToolCalls()),
                     message
             ));
-            return messages;
         }
 
         String text = message.getText();
         if (text != null && !text.isBlank()) {
-            messages.add(assistantMessage(
-                    output.getOutputType() == OutputType.AGENT_MODEL_STREAMING ? "MODEL_DELTA" : "MODEL_MESSAGE",
+            return List.of(assistantMessage(
+                    "MODEL_DELTA",
                     taskId,
-                    node,
+                    null,
                     text,
-                    Map.of("outputType", outputTypeName(output)),
+                    Map.of(),
                     message
             ));
         }
-        return messages;
+        return List.of();
     }
 
     private AssistantMessage toolResponseMessage(
             String taskId,
-            String node,
-            StreamingOutput<?> output,
             ToolResponseMessage message
     ) {
         List<String> toolNames = message.getResponses().stream()
@@ -232,26 +205,21 @@ public class DataProcessingReactAgentService {
         return assistantMessage(
                 "TOOL_RESULT",
                 taskId,
-                node,
+                null,
                 "工具调用完成: " + String.join(", ", toolNames),
-                Map.of(
-                        "outputType", outputTypeName(output),
-                        "toolNames", toolNames
-                )
+                Map.of("toolNames", toolNames)
         );
     }
 
     private AssistantMessage toFinalMessage(
             DataProcessingTaskRequest request,
             String parsedFileRef,
-            AssistantMessage latestAssistantMessage,
-            OverAllState latestState
+            AssistantMessage latestAssistantMessage
     ) {
         DataProcessingAgentResponse response = resolveFinalResponse(
                 request,
                 parsedFileRef,
-                latestAssistantMessage,
-                latestState
+                latestAssistantMessage
         );
         response = enrichFinalResponseFromState(request.taskId(), response);
         return assistantMessage(
@@ -266,14 +234,9 @@ public class DataProcessingReactAgentService {
     private DataProcessingAgentResponse resolveFinalResponse(
             DataProcessingTaskRequest request,
             String parsedFileRef,
-            AssistantMessage latestAssistantMessage,
-            OverAllState latestState
+            AssistantMessage latestAssistantMessage
     ) {
         AssistantMessage assistantMessage = latestAssistantMessage;
-        if (assistantMessage == null) {
-            assistantMessage = latestAssistant(latestState).orElse(null);
-        }
-
         if (assistantMessage != null && assistantMessage.getText() != null && !assistantMessage.getText().isBlank()) {
             try {
                 return parseResponse(assistantMessage.getText());
@@ -357,26 +320,6 @@ public class DataProcessingReactAgentService {
                 "REACT_AGENT_RUN_FAILED",
                 ex.getMessage()
         );
-    }
-
-    private Optional<AssistantMessage> latestAssistant(OverAllState state) {
-        if (state == null) {
-            return Optional.empty();
-        }
-        Object messages = state.value("messages").orElse(null);
-        if (!(messages instanceof List<?> messageList)) {
-            return Optional.empty();
-        }
-        for (int i = messageList.size() - 1; i >= 0; i--) {
-            if (messageList.get(i) instanceof AssistantMessage assistantMessage) {
-                return Optional.of(assistantMessage);
-            }
-        }
-        return Optional.empty();
-    }
-
-    private String outputTypeName(StreamingOutput<?> output) {
-        return output.getOutputType() == null ? "" : output.getOutputType().name();
     }
 
     private AssistantMessage assistantMessage(
