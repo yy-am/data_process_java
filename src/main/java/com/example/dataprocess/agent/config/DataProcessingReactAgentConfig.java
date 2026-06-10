@@ -63,6 +63,7 @@ public class DataProcessingReactAgentConfig {
                         """)
                 .hooks(
                         skillsAgentHook,
+                        new EnsureToolCallIdHook(),
                         new ToolCallbackDeduplicationHook(),
                         ModelCallLimitHook.builder().runLimit(12).build()
                 )

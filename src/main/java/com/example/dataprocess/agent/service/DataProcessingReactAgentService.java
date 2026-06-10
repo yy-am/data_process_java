@@ -2,6 +2,7 @@ package com.example.dataprocess.agent.service;
 
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
+import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
 import com.example.dataprocess.agent.model.AgentWorkflowStage;
 import com.example.dataprocess.agent.model.DataProcessingAgentResponse;
 import com.example.dataprocess.agent.model.DataProcessingAgentStreamEvent;
