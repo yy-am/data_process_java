@@ -9,12 +9,14 @@ import com.alibaba.cloud.ai.graph.skills.registry.classpath.ClasspathSkillRegist
 import com.example.dataprocess.agent.service.AgentStreamEventPublisher;
 import com.example.dataprocess.agent.tool.AgentStateTool;
 import com.example.dataprocess.agent.tool.DataProcessingAgentToolMethods;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.ArrayList;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
@@ -40,7 +42,8 @@ public class DataProcessingReactAgentConfig {
             ChatModel chatModel,
             DataProcessingAgentToolMethods toolMethods,
             AgentStreamEventPublisher eventPublisher,
-            AgentStateTool stateTool
+            AgentStateTool stateTool,
+            ObjectMapper objectMapper
     ) {
         ToolCallback[] dataProcessingTools = ToolCallbacks.from(toolMethods);
         SkillRegistry skillRegistry = buildSkillRegistry();
@@ -48,6 +51,10 @@ public class DataProcessingReactAgentConfig {
                 .skillRegistry(skillRegistry)
                 .groupedTools(Map.of(DATA_PROCESSING_SKILL_NAME, List.of(dataProcessingTools)))
                 .build();
+        List<ToolCallback> knownToolCallbacks = new ArrayList<>(List.of(dataProcessingTools));
+        knownToolCallbacks.addAll(skillsAgentHook.getTools());
+        ToolCallMessageValidator toolCallMessageValidator =
+                new ToolCallMessageValidator(objectMapper, knownToolCallbacks);
 
         return ReactAgent.builder()
                 .name("data-processing-react-agent")
@@ -68,6 +75,7 @@ public class DataProcessingReactAgentConfig {
                 .hooks(
                         skillsAgentHook,
                         new EnsureToolCallIdHook(),
+                        new StreamingToolCallRepairHook(toolCallMessageValidator),
                         new ToolCallbackDeduplicationHook(),
                         ModelCallLimitHook.builder().runLimit(12).build()
                 )
