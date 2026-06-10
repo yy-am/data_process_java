@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.content.Media;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.util.StringUtils;
@@ -16,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -47,15 +49,17 @@ public class ToolCallMessageValidator {
             return ValidationResult.unchanged(messages);
         }
 
-        Set<String> respondedToolCallIds = collectRespondedToolCallIds(messages);
-        List<Message> rebuiltMessages = new ArrayList<>(messages.size());
+        MessageMergeResult messageMergeResult = mergeAdjacentAssistantMessages(messages);
+        List<Message> sourceMessages = messageMergeResult.messages();
+        Set<String> respondedToolCallIds = collectRespondedToolCallIds(sourceMessages);
+        List<Message> rebuiltMessages = new ArrayList<>(sourceMessages.size());
         List<ValidationDetail> details = new ArrayList<>();
-        boolean changed = false;
+        boolean changed = messageMergeResult.changed();
         int originalToolCallCount = 0;
         int normalizedToolCallCount = 0;
         int syntheticToolResponseCount = 0;
 
-        for (Message message : messages) {
+        for (Message message : sourceMessages) {
             if (!(message instanceof AssistantMessage assistantMessage) || !assistantMessage.hasToolCalls()) {
                 rebuiltMessages.add(message);
                 continue;
@@ -108,6 +112,51 @@ public class ToolCallMessageValidator {
                 syntheticToolResponseCount,
                 details.isEmpty() ? List.of() : List.copyOf(details)
         );
+    }
+
+    private MessageMergeResult mergeAdjacentAssistantMessages(List<Message> messages) {
+        List<Message> mergedMessages = new ArrayList<>(messages.size());
+        boolean changed = false;
+
+        for (Message message : messages) {
+            if (!(message instanceof AssistantMessage currentAssistant)) {
+                mergedMessages.add(message);
+                continue;
+            }
+
+            if (mergedMessages.isEmpty()) {
+                mergedMessages.add(currentAssistant);
+                continue;
+            }
+
+            Message previousMessage = mergedMessages.get(mergedMessages.size() - 1);
+            if (!(previousMessage instanceof AssistantMessage previousAssistant)
+                    || !shouldMergeAssistantMessages(previousAssistant, currentAssistant)) {
+                mergedMessages.add(currentAssistant);
+                continue;
+            }
+
+            mergedMessages.set(mergedMessages.size() - 1, mergeAssistantMessages(previousAssistant, currentAssistant));
+            changed = true;
+        }
+
+        if (!changed) {
+            return new MessageMergeResult(messages, false);
+        }
+        return new MessageMergeResult(List.copyOf(mergedMessages), true);
+    }
+
+    private boolean shouldMergeAssistantMessages(AssistantMessage previous, AssistantMessage current) {
+        return previous.hasToolCalls() || current.hasToolCalls();
+    }
+
+    private AssistantMessage mergeAssistantMessages(AssistantMessage previous, AssistantMessage current) {
+        return AssistantMessage.builder()
+                .content(mergeText(previous.getText(), current.getText()))
+                .properties(mergeMetadata(previous.getMetadata(), current.getMetadata()))
+                .toolCalls(mergeToolCalls(previous.getToolCalls(), current.getToolCalls()))
+                .media(mergeMedia(previous.getMedia(), current.getMedia()))
+                .build();
     }
 
     private AssistantProcessingResult normalizeAssistantToolCalls(
@@ -612,6 +661,61 @@ public class ToolCallMessageValidator {
         return StringUtils.hasText(first) ? first : second;
     }
 
+    private String mergeText(String first, String second) {
+        if (!StringUtils.hasText(first)) {
+            return second;
+        }
+        if (!StringUtils.hasText(second)) {
+            return first;
+        }
+        return first + second;
+    }
+
+    private Map<String, Object> mergeMetadata(Map<String, Object> first, Map<String, Object> second) {
+        if ((first == null || first.isEmpty()) && (second == null || second.isEmpty())) {
+            return Map.of();
+        }
+        Map<String, Object> merged = new HashMap<>();
+        if (first != null && !first.isEmpty()) {
+            merged.putAll(first);
+        }
+        if (second != null && !second.isEmpty()) {
+            merged.putAll(second);
+        }
+        return merged;
+    }
+
+    private List<AssistantMessage.ToolCall> mergeToolCalls(
+            List<AssistantMessage.ToolCall> first,
+            List<AssistantMessage.ToolCall> second
+    ) {
+        if ((first == null || first.isEmpty()) && (second == null || second.isEmpty())) {
+            return List.of();
+        }
+        List<AssistantMessage.ToolCall> merged = new ArrayList<>();
+        if (first != null && !first.isEmpty()) {
+            merged.addAll(first);
+        }
+        if (second != null && !second.isEmpty()) {
+            merged.addAll(second);
+        }
+        return merged;
+    }
+
+    private List<Media> mergeMedia(List<Media> first, List<Media> second) {
+        if ((first == null || first.isEmpty()) && (second == null || second.isEmpty())) {
+            return List.of();
+        }
+        List<Media> merged = new ArrayList<>();
+        if (first != null && !first.isEmpty()) {
+            merged.addAll(first);
+        }
+        if (second != null && !second.isEmpty()) {
+            merged.addAll(second);
+        }
+        return merged;
+    }
+
     private boolean looksLikeCompleteJsonObject(String text) {
         JsonNode node = parseJson(text);
         return node != null && node.isObject();
@@ -763,6 +867,9 @@ public class ToolCallMessageValidator {
     }
 
     private record ParsedJson(JsonNode node, String errorMessage) {
+    }
+
+    private record MessageMergeResult(List<Message> messages, boolean changed) {
     }
 
     private record HeuristicMergeResult(
