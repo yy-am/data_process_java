@@ -309,13 +309,12 @@ public class ToolCallMessageValidator {
         HeuristicMergeResult heuristicMergeResult = tryHeuristicMerge(indexedToolCalls, consumed);
         if (heuristicMergeResult.toolCall() != null) {
             normalized.add(new OrderedToolCall(heuristicMergeResult.orderIndex(), heuristicMergeResult.toolCall()));
-            consumed.add(heuristicMergeResult.nameFragment().index());
-            consumed.add(heuristicMergeResult.argumentsFragment().index());
+            consumed.addAll(heuristicMergeResult.consumedIndexes());
             repaired = true;
             details.add(ValidationDetail.merged(
                     heuristicMergeResult.toolCall().id(),
                     heuristicMergeResult.toolCall().name(),
-                    2,
+                    heuristicMergeResult.originalCount(),
                     summarize(heuristicMergeResult.toolCall().arguments(), ARGUMENTS_SUMMARY_MAX_LEN)
             ));
         }
@@ -385,7 +384,7 @@ public class ToolCallMessageValidator {
         }
 
         IndexedToolCall namedFragment = namedFragments.get(0);
-        String mergedArguments = null;
+        String mergedArguments = namedFragment.toolCall().arguments();
         String mergedId = namedFragment.toolCall().id();
         String mergedType = namedFragment.toolCall().type();
         List<IndexedToolCall> consumedFragments = new ArrayList<>();
@@ -400,7 +399,7 @@ public class ToolCallMessageValidator {
             }
         }
 
-        if (!looksLikeCompleteJsonObject(mergedArguments)) {
+        if (consumedFragments.isEmpty()) {
             return HeuristicMergeResult.empty();
         }
 
@@ -410,12 +409,14 @@ public class ToolCallMessageValidator {
                 namedFragment.toolCall().name(),
                 mergedArguments
         );
+        Set<Integer> consumedIndexes = new LinkedHashSet<>();
+        consumedIndexes.add(namedFragment.index());
+        consumedFragments.forEach(fragment -> consumedIndexes.add(fragment.index()));
         return new HeuristicMergeResult(
                 mergedToolCall,
-                namedFragment,
-                consumedFragments.get(consumedFragments.size() - 1),
-                Math.min(namedFragment.index(),
-                        consumedFragments.stream().mapToInt(IndexedToolCall::index).min().orElse(namedFragment.index()))
+                consumedIndexes,
+                consumedIndexes.size(),
+                consumedIndexes.stream().mapToInt(Integer::intValue).min().orElse(namedFragment.index())
         );
     }
 
@@ -874,12 +875,12 @@ public class ToolCallMessageValidator {
 
     private record HeuristicMergeResult(
             AssistantMessage.ToolCall toolCall,
-            IndexedToolCall nameFragment,
-            IndexedToolCall argumentsFragment,
+            Set<Integer> consumedIndexes,
+            int originalCount,
             int orderIndex
     ) {
         private static HeuristicMergeResult empty() {
-            return new HeuristicMergeResult(null, null, null, Integer.MAX_VALUE);
+            return new HeuristicMergeResult(null, Set.of(), 0, Integer.MAX_VALUE);
         }
     }
 }
