@@ -10,22 +10,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.Disposable;
 
 import java.io.IOException;
-import java.io.OutputStreamWriter;
-import java.io.UncheckedIOException;
-import java.io.Writer;
-import java.nio.charset.StandardCharsets;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * REST entry points for the decoupled data-processing agent flow.
@@ -71,7 +67,7 @@ public class DataProcessingAgentInterface {
     }
 
     @PostMapping(value = "/run", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<StreamingResponseBody> run(@Valid @RequestBody DataProcessingTaskRequest request) {
+    public SseEmitter run(@Valid @RequestBody DataProcessingTaskRequest request) {
         String taskId = request.taskId();
         String inputType = request.inputType();
         int sourceHeaderCount = request.sourceHeaders() == null ? 0 : request.sourceHeaders().size();
@@ -84,35 +80,51 @@ public class DataProcessingAgentInterface {
                 sampleRowCount
         );
 
-        StreamingResponseBody body = outputStream -> {
-            try (Writer writer = new OutputStreamWriter(outputStream, StandardCharsets.UTF_8)) {
-                long[] sequence = {0L};
-                log.info("Agent SSE stream subscribed, taskId={}", taskId);
+        SseEmitter emitter = new SseEmitter(0L);
+        AtomicLong sequence = new AtomicLong();
+        log.info("Agent SSE emitter created, taskId={}", taskId);
 
-                agentService.run(request)
-                        .doOnNext(event -> emitMessage(writer, taskId, ++sequence[0], event))
-                        .doOnError(ex -> log.error("Agent SSE stream failed, taskId={}", taskId, ex))
-                        .doOnComplete(() -> log.info(
-                                "Agent SSE stream completed, taskId={}, eventCount={}",
-                                taskId,
-                                sequence[0]
-                        ))
-                        .blockLast();
+        Disposable subscription = agentService.run(request).subscribe(
+                event -> emitMessage(emitter, taskId, sequence.incrementAndGet(), event),
+                ex -> {
+                    log.error("Agent SSE stream failed, taskId={}", taskId, ex);
+                    completeWithError(emitter, taskId, ex);
+                },
+                () -> {
+                    log.info(
+                            "Agent SSE stream completed, taskId={}, eventCount={}",
+                            taskId,
+                            sequence.get()
+                    );
+                    emitter.complete();
+                }
+        );
 
-                log.info("Agent SSE response body closed, taskId={}, eventCount={}", taskId, sequence[0]);
+        emitter.onCompletion(() -> {
+            log.info("Agent SSE emitter completed, taskId={}, eventCount={}", taskId, sequence.get());
+            if (!subscription.isDisposed()) {
+                subscription.dispose();
             }
-        };
+        });
+        emitter.onTimeout(() -> {
+            log.warn("Agent SSE emitter timeout, taskId={}, eventCount={}", taskId, sequence.get());
+            if (!subscription.isDisposed()) {
+                subscription.dispose();
+            }
+            emitter.complete();
+        });
+        emitter.onError(ex -> {
+            log.error("Agent SSE emitter error callback, taskId={}", taskId, ex);
+            if (!subscription.isDisposed()) {
+                subscription.dispose();
+            }
+        });
 
-        return ResponseEntity.ok()
-                .contentType(MediaType.TEXT_EVENT_STREAM)
-                .header(HttpHeaders.CACHE_CONTROL, "no-cache")
-                .header(HttpHeaders.CONNECTION, "keep-alive")
-                .header("X-Accel-Buffering", "no")
-                .body(body);
+        return emitter;
     }
 
     private void emitMessage(
-            Writer writer,
+            SseEmitter emitter,
             String taskId,
             long sequence,
             DataProcessingAgentStreamEvent event
@@ -120,10 +132,10 @@ public class DataProcessingAgentInterface {
         String eventId = taskId + "-" + sequence;
         String eventName = event.event() == null || event.event().isBlank() ? "MESSAGE" : event.event();
         try {
-            writer.write("id: " + eventId + "\n");
-            writer.write("event: " + eventName + "\n");
-            writer.write("data: " + writeEventJson(event) + "\n\n");
-            writer.flush();
+            emitter.send(SseEmitter.event()
+                    .id(eventId)
+                    .name(eventName)
+                    .data(writeEventJson(event), MediaType.APPLICATION_JSON));
             log.info(
                     "Agent SSE event emitted, taskId={}, id={}, event={}, stage={}, textLength={}, detailKeys={}",
                     taskId,
@@ -135,7 +147,16 @@ public class DataProcessingAgentInterface {
             );
         } catch (IOException ex) {
             log.error("Agent SSE event send failed, taskId={}, id={}, event={}", taskId, eventId, eventName, ex);
-            throw new UncheckedIOException(ex);
+            throw new IllegalStateException("Failed to send SSE event", ex);
+        }
+    }
+
+    private void completeWithError(SseEmitter emitter, String taskId, Throwable ex) {
+        try {
+            emitter.completeWithError(ex);
+        } catch (Exception completionEx) {
+            log.warn("Agent SSE completeWithError failed, taskId={}", taskId, completionEx);
+            emitter.complete();
         }
     }
 
