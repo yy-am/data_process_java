@@ -6,13 +6,12 @@ import org.springframework.http.MediaType;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import reactor.core.Disposable;
-import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Reference controller fragment for SseEmitter-based agent streaming.
@@ -35,53 +34,74 @@ public final class SSEEmitterControllerReference {
     private SseEmitter run(DataProcessingTaskRequest request) {
         SseEmitter emitter = new SseEmitter(0L);
         AtomicLong sequence = new AtomicLong();
-        AtomicReference<Disposable> subscriptionRef = new AtomicReference<>();
+        AtomicBoolean emitterClosed = new AtomicBoolean(false);
 
-        Disposable subscription = dataProcessingReactAgentService.run(request)
-                .subscribeOn(Schedulers.boundedElastic())
-                .doOnSubscribe(ignoredSubscription ->
-                        logger.info("Agent SSE stream subscribed, taskId={}", request.taskId()))
-                .subscribe(
-                        message -> emitMessage(emitter, request.taskId(), sequence.incrementAndGet(), message),
-                        ex -> {
-                            logger.error("Agent SSE stream failed, taskId={}", request.taskId(), ex);
-                            emitter.completeWithError(ex);
-                        },
-                        () -> {
-                            logger.info(
-                                    "Agent SSE stream completed, taskId={}, eventCount={}",
-                                    request.taskId(),
-                                    sequence.get()
-                            );
-                            emitter.complete();
-                        }
-                );
-        subscriptionRef.set(subscription);
+        emitBootstrapEvent(emitter, request.taskId(), sequence.incrementAndGet());
+
+        CompletableFuture<Void> streamingTask = CompletableFuture.runAsync(() -> {
+            try {
+                logger.info("Agent SSE stream subscribed, taskId={}", request.taskId());
+                dataProcessingReactAgentService.run(request)
+                        .takeWhile(ignored -> !emitterClosed.get())
+                        .doOnNext(message -> emitMessage(
+                                emitter,
+                                request.taskId(),
+                                sequence.incrementAndGet(),
+                                message
+                        ))
+                        .blockLast();
+
+                if (emitterClosed.compareAndSet(false, true)) {
+                    logger.info(
+                            "Agent SSE stream completed, taskId={}, eventCount={}",
+                            request.taskId(),
+                            sequence.get()
+                    );
+                    emitter.complete();
+                }
+            } catch (Throwable ex) {
+                if (emitterClosed.compareAndSet(false, true)) {
+                    logger.error("Agent SSE stream failed, taskId={}", request.taskId(), ex);
+                    emitter.completeWithError(ex);
+                }
+            }
+        });
 
         emitter.onCompletion(() -> {
-            Disposable current = subscriptionRef.get();
-            if (current != null && !current.isDisposed()) {
-                current.dispose();
-            }
+            emitterClosed.set(true);
+            streamingTask.cancel(true);
             logger.info("Agent SSE emitter completed, taskId={}, eventCount={}", request.taskId(), sequence.get());
         });
         emitter.onTimeout(() -> {
-            Disposable current = subscriptionRef.get();
-            if (current != null && !current.isDisposed()) {
-                current.dispose();
+            if (emitterClosed.compareAndSet(false, true)) {
+                streamingTask.cancel(true);
+                logger.warn("Agent SSE emitter timed out, taskId={}, eventCount={}", request.taskId(), sequence.get());
+                emitter.complete();
             }
-            logger.warn("Agent SSE emitter timed out, taskId={}, eventCount={}", request.taskId(), sequence.get());
-            emitter.complete();
         });
         emitter.onError(ex -> {
-            Disposable current = subscriptionRef.get();
-            if (current != null && !current.isDisposed()) {
-                current.dispose();
-            }
+            emitterClosed.set(true);
+            streamingTask.cancel(true);
             logger.error("Agent SSE emitter failed, taskId={}, eventCount={}", request.taskId(), sequence.get(), ex);
         });
 
         return emitter;
+    }
+
+    private void emitBootstrapEvent(
+            SseEmitter emitter,
+            String taskId,
+            long sequence
+    ) {
+        try {
+            emitter.send(SseEmitter.event()
+                    .id(taskId + "-" + sequence)
+                    .name("OPEN")
+                    .data("{\"taskId\":\"" + taskId + "\"}", MediaType.APPLICATION_JSON));
+            logger.info("Agent SSE bootstrap event emitted, taskId={}, id={}", taskId, taskId + "-" + sequence);
+        } catch (IOException | IllegalStateException ex) {
+            throw new IllegalStateException("Failed to send SSE bootstrap event", ex);
+        }
     }
 
     private ServerSentEvent<AssistantMessage> toServerSentEvent(
