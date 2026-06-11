@@ -1,12 +1,16 @@
 package com.example.dataprocess.agent.service;
 
+import com.alibaba.cloud.ai.graph.NodeOutput;
+import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
 import com.alibaba.cloud.ai.graph.exception.GraphRunnerException;
+import com.alibaba.cloud.ai.graph.streaming.OutputType;
+import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import com.example.dataprocess.agent.model.AgentWorkflowStage;
 import com.example.dataprocess.agent.model.DataProcessingAgentResponse;
-import com.example.dataprocess.agent.model.DataProcessingAgentStreamEvent;
 import com.example.dataprocess.agent.model.DataProcessingAgentState;
+import com.example.dataprocess.agent.model.DataProcessingAgentStreamEvent;
 import com.example.dataprocess.agent.model.ParsedExcelFile;
 import com.example.dataprocess.agent.tool.AgentStateTool;
 import com.example.dataprocess.agent.tool.ParsedExcelFileTool;
@@ -17,10 +21,9 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
-import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Sinks;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,89 +39,83 @@ public class DataProcessingReactAgentService {
     private static final String AGENT_INTERNAL_MODEL_STREAMING_KEY = "_stream_";
 
     private final ReactAgent dataProcessingReactAgent;
+    private final AgentStreamEventPublisher eventPublisher;
     private final AgentStateTool stateTool;
     private final ParsedExcelFileTool parsedExcelFileTool;
-    private final AgentStreamEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
 
     public DataProcessingReactAgentService(
             @Qualifier("dataProcessingReactAgent") ReactAgent dataProcessingReactAgent,
+            AgentStreamEventPublisher eventPublisher,
             AgentStateTool stateTool,
             ParsedExcelFileTool parsedExcelFileTool,
-            AgentStreamEventPublisher eventPublisher,
             ObjectMapper objectMapper
     ) {
         this.dataProcessingReactAgent = dataProcessingReactAgent;
+        this.eventPublisher = eventPublisher;
         this.stateTool = stateTool;
         this.parsedExcelFileTool = parsedExcelFileTool;
-        this.eventPublisher = eventPublisher;
         this.objectMapper = objectMapper;
     }
 
     public Flux<DataProcessingAgentStreamEvent> run(DataProcessingTaskRequest request) {
         return Flux.defer(() -> {
-            String parsedFileRef = ensureParsedFileRef(request);
             String taskId = request.taskId();
+            String parsedFileRef = ensureParsedFileRef(request);
             AtomicReference<AssistantMessage> latestAssistantMessage = new AtomicReference<>();
+            AtomicReference<OverAllState> latestState = new AtomicReference<>();
+
             RunnableConfig config = RunnableConfig.builder()
                     .threadId(taskId)
                     .addMetadata(AGENT_INTERNAL_MODEL_STREAMING_KEY, true)
                     .build();
-            Sinks.Many<DataProcessingAgentStreamEvent> outgoing = Sinks.many().unicast().onBackpressureBuffer();
-            Flux<DataProcessingAgentStreamEvent> toolEventStream = eventPublisher.createStream(taskId);
 
-            Flux<Message> agentStream;
+            Flux<DataProcessingAgentStreamEvent> publishedEvents = eventPublisher.createStream(taskId);
+            Flux<DataProcessingAgentStreamEvent> mainEvents;
+
             try {
-                agentStream = dataProcessingReactAgent.streamMessages(buildAgentInstruction(request, parsedFileRef), config);
+                Flux<NodeOutput> agentStream = dataProcessingReactAgent.stream(
+                        buildAgentInstruction(request, parsedFileRef),
+                        config
+                );
+
+                mainEvents = Flux.concat(
+                        Flux.just(toStreamEvent(taskId, assistantMessage(
+                                "START",
+                                taskId,
+                                null,
+                                "数据加工 Agent 开始运行。",
+                                Map.of("parsedFileRef", parsedFileRef)
+                        ))),
+                        agentStream.concatMap(output -> Flux.fromIterable(toAssistantMessages(
+                                        taskId,
+                                        output,
+                                        latestAssistantMessage,
+                                        latestState
+                                )))
+                                .map(message -> toStreamEvent(taskId, message)),
+                        Flux.defer(() -> Flux.just(toStreamEvent(taskId, toFinalMessage(
+                                request,
+                                parsedFileRef,
+                                latestAssistantMessage.get(),
+                                latestState.get()
+                        ))))
+                ).onErrorResume(ex -> Flux.just(toStreamEvent(
+                        taskId,
+                        toErrorMessage(request, parsedFileRef, ex)
+                )));
             } catch (Exception ex) {
-                return Flux.just(toStreamEvent(taskId, toErrorMessage(request, parsedFileRef, ex)));
+                mainEvents = Flux.just(toStreamEvent(taskId, toErrorMessage(request, parsedFileRef, ex)));
             }
 
-            outgoing.tryEmitNext(toStreamEvent(taskId, assistantMessage(
-                    "START",
-                    taskId,
-                    null,
-                    "数据加工 Agent 开始运行。",
-                    Map.of("parsedFileRef", parsedFileRef)
-            )));
-
-            Disposable toolSubscription = toolEventStream.subscribe(
-                    outgoing::tryEmitNext,
-                    ex -> outgoing.tryEmitNext(toStreamEvent(taskId, toErrorMessage(request, parsedFileRef, ex)))
+            return Flux.merge(
+                    publishedEvents,
+                    mainEvents.doFinally(signalType -> eventPublisher.complete(taskId))
             );
-
-            Disposable agentSubscription = agentStream
-                    .concatMap(message -> Flux.fromIterable(toAssistantMessages(taskId, message, latestAssistantMessage)))
-                    .map(message -> toStreamEvent(taskId, message))
-                    .subscribe(
-                            outgoing::tryEmitNext,
-                            ex -> {
-                                outgoing.tryEmitNext(toStreamEvent(taskId, toErrorMessage(request, parsedFileRef, ex)));
-                                eventPublisher.remove(taskId);
-                                outgoing.tryEmitComplete();
-                            },
-                            () -> {
-                                outgoing.tryEmitNext(toStreamEvent(taskId, toFinalMessage(
-                                        request,
-                                        parsedFileRef,
-                                        latestAssistantMessage.get()
-                                )));
-                                eventPublisher.complete(taskId);
-                                outgoing.tryEmitComplete();
-                            }
-                    );
-
-            return outgoing.asFlux()
-                    .doFinally(signalType -> {
-                        if (!toolSubscription.isDisposed()) {
-                            toolSubscription.dispose();
-                        }
-                        if (!agentSubscription.isDisposed()) {
-                            agentSubscription.dispose();
-                        }
-                        eventPublisher.remove(taskId);
-                    });
-        }).onErrorResume(ex -> Flux.just(toStreamEvent(request.taskId(), toErrorMessage(request, null, ex))));
+        }).onErrorResume(ex -> Flux.just(toStreamEvent(
+                request.taskId(),
+                toErrorMessage(request, null, ex)
+        )));
     }
 
     private String ensureParsedFileRef(DataProcessingTaskRequest request) {
@@ -139,16 +136,12 @@ public class DataProcessingReactAgentService {
 
         return """
                 请作为数据加工 ReAct Agent 执行一次任务推进。
-
                 必须先读取并遵守 skill: data-processing-agent-skill。
-                必须严格按照 skill 中“运行流程”的步骤和分支调用工具。
+                必须严格按照 skill 中的运行步骤和分支规则调用工具。
                 如果需要用户确认，保存状态并返回 USER_CONFIRMATION_REQUIRED。
-                如果用户确认已完成或无需用户确认，继续按照 skill 完成后续数据加工流程。
-
-                你的职责是推进工具调用和任务状态；最终返回给前端的 DataProcessingAgentResponse 由服务层根据工具响应或任务状态统一组装。
-                当流程到达等待用户确认、SQL 已渲染、任务失败、任务完成或 skill 要求停止的位置时，不要自行补充或改写最终响应字段。
-
-                本次输入 JSON：
+                如果用户确认已完成或无需用户确认，继续按照 skill 完成后续流程。
+                最终只输出 DataProcessingAgentResponse JSON，不要输出 Markdown 或额外解释。
+                本次输入 JSON:
                 %s
                 """.formatted(writeJson(payload));
     }
@@ -158,7 +151,10 @@ public class DataProcessingReactAgentService {
         try {
             return objectMapper.readValue(json, DataProcessingAgentResponse.class);
         } catch (JsonProcessingException ex) {
-            throw new GraphRunnerException("ReactAgent 最终响应不是合法 DataProcessingAgentResponse JSON: " + content, ex);
+            throw new GraphRunnerException(
+                    "ReactAgent 最终响应不是合法的 DataProcessingAgentResponse JSON: " + content,
+                    ex
+            );
         }
     }
 
@@ -179,12 +175,21 @@ public class DataProcessingReactAgentService {
 
     private List<AssistantMessage> toAssistantMessages(
             String taskId,
-            Message message,
-            AtomicReference<AssistantMessage> latestAssistantMessage
+            NodeOutput output,
+            AtomicReference<AssistantMessage> latestAssistantMessage,
+            AtomicReference<OverAllState> latestState
     ) {
+        latestState.set(output.state());
+        latestAssistant(output.state()).ifPresent(latestAssistantMessage::set);
+
+        if (!(output instanceof StreamingOutput<?> streamingOutput)) {
+            return List.of();
+        }
+
+        Message message = streamingOutput.message();
         if (message instanceof AssistantMessage assistantMessage) {
             latestAssistantMessage.set(assistantMessage);
-            return assistantMessages(taskId, assistantMessage);
+            return assistantMessages(taskId, output.node(), streamingOutput, assistantMessage);
         }
 
         return List.of();
@@ -192,37 +197,37 @@ public class DataProcessingReactAgentService {
 
     private List<AssistantMessage> assistantMessages(
             String taskId,
+            String node,
+            StreamingOutput<?> output,
             AssistantMessage message
     ) {
-        if (message.hasToolCalls()) {
-            return List.of();
-        }
-
+        List<AssistantMessage> messages = new ArrayList<>();
         String text = message.getText();
         if (text != null && !text.isBlank()) {
-            return List.of(assistantMessage(
-                    "MODEL_DELTA",
+            messages.add(assistantMessage(
+                    output.getOutputType() == OutputType.AGENT_MODEL_STREAMING ? "MODEL_DELTA" : "MODEL_MESSAGE",
                     taskId,
-                    null,
+                    node,
                     text,
-                    Map.of(),
+                    Map.of("outputType", outputTypeName(output)),
                     message
             ));
         }
-        return List.of();
+        return messages;
     }
 
     private AssistantMessage toFinalMessage(
             DataProcessingTaskRequest request,
             String parsedFileRef,
-            AssistantMessage latestAssistantMessage
+            AssistantMessage latestAssistantMessage,
+            OverAllState latestState
     ) {
         DataProcessingAgentResponse response = resolveFinalResponse(
                 request,
                 parsedFileRef,
-                latestAssistantMessage
+                latestAssistantMessage,
+                latestState
         );
-        response = enrichFinalResponseFromState(request.taskId(), response);
         return assistantMessage(
                 "FINAL",
                 request.taskId(),
@@ -235,14 +240,19 @@ public class DataProcessingReactAgentService {
     private DataProcessingAgentResponse resolveFinalResponse(
             DataProcessingTaskRequest request,
             String parsedFileRef,
-            AssistantMessage latestAssistantMessage
+            AssistantMessage latestAssistantMessage,
+            OverAllState latestState
     ) {
         AssistantMessage assistantMessage = latestAssistantMessage;
+        if (assistantMessage == null) {
+            assistantMessage = latestAssistant(latestState).orElse(null);
+        }
+
         if (assistantMessage != null && assistantMessage.getText() != null && !assistantMessage.getText().isBlank()) {
             try {
                 return parseResponse(assistantMessage.getText());
             } catch (Exception ignored) {
-                // Agent may stop after a deterministic tool response; in that case the persisted task state is authoritative.
+                // Agent may stop after deterministic tool execution; persisted state is the fallback source.
             }
         }
 
@@ -258,7 +268,7 @@ public class DataProcessingReactAgentService {
                         List.of(),
                         Map.of(),
                         "REACT_AGENT_NO_FINAL_RESPONSE",
-                        "ReactAgent 流式运行结束，但未生成最终响应且未找到可恢复任务状态。"
+                        "ReactAgent 流式运行结束，但既没有最终响应，也没有可恢复的任务状态。"
                 ));
     }
 
@@ -298,7 +308,7 @@ public class DataProcessingReactAgentService {
                             List.of(),
                             Map.of(),
                             "REACT_AGENT_NO_ASSISTANT_MESSAGE",
-                            "ReactAgent 未生成最终 AssistantMessage，且未找到可恢复任务状态。"
+                            "ReactAgent 未生成最终 AssistantMessage，且未找到可恢复的任务状态。"
                     ));
         }
 
@@ -321,6 +331,26 @@ public class DataProcessingReactAgentService {
                 "REACT_AGENT_RUN_FAILED",
                 ex.getMessage()
         );
+    }
+
+    private Optional<AssistantMessage> latestAssistant(OverAllState state) {
+        if (state == null) {
+            return Optional.empty();
+        }
+        Object messages = state.value("messages").orElse(null);
+        if (!(messages instanceof List<?> messageList)) {
+            return Optional.empty();
+        }
+        for (int i = messageList.size() - 1; i >= 0; i--) {
+            if (messageList.get(i) instanceof AssistantMessage assistantMessage) {
+                return Optional.of(assistantMessage);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private String outputTypeName(StreamingOutput<?> output) {
+        return output.getOutputType() == null ? "" : output.getOutputType().name();
     }
 
     private AssistantMessage assistantMessage(
@@ -368,7 +398,7 @@ public class DataProcessingReactAgentService {
         try {
             return objectMapper.writeValueAsString(value);
         } catch (JsonProcessingException ex) {
-            throw new IllegalStateException("序列化 Agent 输入失败。", ex);
+            throw new IllegalStateException("序列化 Agent 数据失败。", ex);
         }
     }
 
@@ -398,45 +428,6 @@ public class DataProcessingReactAgentService {
                 state.summary(),
                 state.stage() == AgentWorkflowStage.FAILED ? "AGENT_TASK_FAILED" : "",
                 responseMessage(state)
-        );
-    }
-
-    private DataProcessingAgentResponse enrichFinalResponseFromState(
-            String taskId,
-            DataProcessingAgentResponse response
-    ) {
-        if (response == null) {
-            return null;
-        }
-
-        return stateTool.loadTaskState(taskId)
-                .map(DataProcessingAgentState::resultPreviewRows)
-                .filter(rows -> rows != null && !rows.isEmpty())
-                .map(rows -> withResultPreviewRows(response, rows))
-                .orElse(response);
-    }
-
-    private DataProcessingAgentResponse withResultPreviewRows(
-            DataProcessingAgentResponse response,
-            List<Map<String, String>> resultPreviewRows
-    ) {
-        Map<String, Object> summary = new LinkedHashMap<>();
-        if (response.summary() != null) {
-            summary.putAll(response.summary());
-        }
-        summary.put("resultPreviewRows", resultPreviewRows);
-
-        return new DataProcessingAgentResponse(
-                response.stage(),
-                response.taskId(),
-                response.parsedFileRef(),
-                response.templateRecognitionResult(),
-                response.fieldBindingPlan(),
-                response.confirmationItems(),
-                response.userConfirmationResult(),
-                summary,
-                response.errorCode(),
-                response.message()
         );
     }
 
@@ -494,7 +485,7 @@ public class DataProcessingReactAgentService {
             case USER_CONFIRMED -> "用户确认阶段已完成。";
             case POST_CONFIRMATION_CONTEXT_READY -> "确认后的加工上下文已准备完成。";
             case SQL_GENERATION_CONTEXT_READY -> "SQL 生成上下文已准备完成。";
-            case PROCESSING_SQL_RENDERED -> "完整 SQL 已生成，等待落表执行实现接入。";
+            case PROCESSING_SQL_RENDERED -> "完整 SQL 已生成，等待落表执行接入。";
             case RESULT_TABLE_WRITTEN -> "结果表已写入，等待导出 Excel。";
             case FAILED -> "任务失败。";
             case COMPLETED -> "任务已完成。";

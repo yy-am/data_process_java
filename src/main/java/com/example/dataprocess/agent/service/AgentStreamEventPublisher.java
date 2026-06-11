@@ -18,17 +18,14 @@ public class AgentStreamEventPublisher {
     private final Map<String, Sinks.Many<DataProcessingAgentStreamEvent>> sinks = new ConcurrentHashMap<>();
 
     public Flux<DataProcessingAgentStreamEvent> createStream(String taskId) {
-        return sinks.computeIfAbsent(taskId, ignored -> Sinks.many().multicast().onBackpressureBuffer()).asFlux();
+        return sinks.computeIfAbsent(taskId, ignored -> newSink()).asFlux();
     }
 
     public void emit(String taskId, DataProcessingAgentStreamEvent event) {
         if (taskId == null || taskId.isBlank() || event == null) {
             return;
         }
-        Sinks.Many<DataProcessingAgentStreamEvent> sink = sinks.computeIfAbsent(
-                taskId,
-                ignored -> Sinks.many().multicast().onBackpressureBuffer()
-        );
+        Sinks.Many<DataProcessingAgentStreamEvent> sink = sinks.computeIfAbsent(taskId, ignored -> newSink());
         sink.tryEmitNext(event);
     }
 
@@ -48,5 +45,9 @@ public class AgentStreamEventPublisher {
 
     public void remove(String taskId) {
         sinks.remove(taskId);
+    }
+
+    private Sinks.Many<DataProcessingAgentStreamEvent> newSink() {
+        return Sinks.many().replay().limit(256);
     }
 }
