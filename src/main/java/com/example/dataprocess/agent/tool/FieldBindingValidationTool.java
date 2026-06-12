@@ -7,7 +7,7 @@ import com.example.dataprocess.domain.model.ProcessingRule;
 import com.example.dataprocess.domain.model.ProcessingRuleItem;
 import org.springframework.stereotype.Component;
 
-import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
 @Component
 public class FieldBindingValidationTool {
 
-    private static final Set<String> FIELD_BINDING_RULE_TYPES = Set.of("DIRECT_MAPPING", "EXPR");
+    private static final Set<String> USER_CONFIRM_RULE_TYPES = Set.of("USER_CONFIRM_OPTION", "USER_CONFIRM_INPUT");
 
     public FieldBindingPlan validateFieldBindingPlan(
             FieldBindingPlan plan,
@@ -31,24 +31,13 @@ public class FieldBindingValidationTool {
         }
 
         Set<String> availableHeaders = Set.copyOf(inputHeaders);
-        List<ProcessingRuleItem> sourceDependentRules = processingRule.ruleItems().stream()
-                .filter(item -> FIELD_BINDING_RULE_TYPES.contains(item.ruleType()))
-                .filter(item -> !item.sourceColumns().isEmpty())
-                .toList();
-
-        Set<String> expectedKeys = sourceDependentRules.stream()
-                .flatMap(item -> item.sourceColumns().stream().map(sourceColumn -> key(item, sourceColumn)))
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        Set<String> actualKeys = plan.items().stream()
-                .map(item -> item.targetColumn() + "|" + item.ruleType() + "|" + item.sourceColumn())
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-
-        if (!expectedKeys.equals(actualKeys)) {
-            throw new IllegalArgumentException("字段绑定计划覆盖范围不匹配，期望 " + expectedKeys + "，实际 " + actualKeys);
-        }
-
-        Map<String, ProcessingRuleItem> ruleByTargetColumn = sourceDependentRules.stream()
-                .collect(Collectors.toMap(ProcessingRuleItem::targetColumn, item -> item, (left, right) -> left));
+        Map<String, ProcessingRuleItem> ruleByTargetColumn = processingRule.ruleItems().stream()
+                .collect(Collectors.toMap(
+                        ProcessingRuleItem::targetColumn,
+                        item -> item,
+                        (left, right) -> left,
+                        LinkedHashMap::new
+                ));
 
         List<FieldBindingItem> normalizedItems = plan.items().stream()
                 .map(item -> validateItem(item, ruleByTargetColumn, availableHeaders))
@@ -71,11 +60,14 @@ public class FieldBindingValidationTool {
         if (!ruleItem.ruleType().equals(item.ruleType())) {
             throw new IllegalArgumentException("字段绑定计划 ruleType 与规则不一致: " + item.targetColumn());
         }
-        if (!ruleItem.sourceColumns().contains(item.sourceColumn())) {
-            throw new IllegalArgumentException("字段绑定计划包含规则未声明的 sourceColumn: " + item.sourceColumn());
-        }
         if (item.status() == null) {
             throw new IllegalArgumentException("字段绑定计划缺少状态: " + item.targetColumn());
+        }
+        if (USER_CONFIRM_RULE_TYPES.contains(item.ruleType())
+                && item.sourceColumn() != null
+                && !item.sourceColumn().isBlank()
+                && !availableHeaders.contains(item.sourceColumn())) {
+            throw new IllegalArgumentException("用户确认类规则的 sourceColumn 必须来自上传 Excel 表头: " + item.sourceColumn());
         }
 
         List<String> candidateHeaders = item.candidateHeaders() == null ? List.of() : List.copyOf(item.candidateHeaders());
@@ -126,9 +118,6 @@ public class FieldBindingValidationTool {
         if (item.selectedHeader() != null) {
             throw new IllegalArgumentException("NEEDS_CONFIRMATION 字段绑定不能包含 selectedHeader。");
         }
-        if (candidateHeaders.size() < 2) {
-            throw new IllegalArgumentException("NEEDS_CONFIRMATION 字段绑定至少需要两个 candidateHeaders。");
-        }
         return new FieldBindingItem(
                 item.targetColumn(),
                 item.ruleType(),
@@ -162,10 +151,6 @@ public class FieldBindingValidationTool {
                 List.of(),
                 item.reason()
         );
-    }
-
-    private String key(ProcessingRuleItem item, String sourceColumn) {
-        return item.targetColumn() + "|" + item.ruleType() + "|" + sourceColumn;
     }
 
     private String resolveBindingDisplayName(FieldBindingItem item, ProcessingRuleItem ruleItem) {
