@@ -222,11 +222,11 @@ accept_template_recognition(taskId, templateRecognitionResult)
 
 必须使用 `accept_template_recognition` 返回的上下文生成 `FieldBindingPlan`。
 
-本步骤的目标是为后续数据加工建立“目标列如何从用户上传的 Excel 中取值”的基础依据。Agent 需要逐条理解加工规则：每个目标列最终要生成什么值、这个值是否依赖 Excel 原始列、依赖哪些业务字段、是否可能由用户上传文件中已有字段直接提供。然后结合 Excel 原始表头和样例数据，判断每个目标列相关的数据来源能否在原始 Excel 中找到匹配列，并把判断结果写入 `FieldBindingPlan.items`。
+本步骤是 Agent 对加工规则所需 Excel 来源字段的正式识别。Agent 必须逐条理解加工规则：目标列要生成什么值、规则类型是什么、是否依赖 Excel 原始列、依赖哪些规则源字段、是否存在表达式或条件逻辑。然后结合 Excel 原始表头和样例数据，判断规则所需来源是否能从上传 Excel 中取得，并生成字段绑定计划。
 
-字段绑定计划不是最终加工 SQL，也不是用户确认结果。它只表达 Agent 对“规则所需数据来源”和“Excel 原始列”之间关系的判断。后续工具会基于该计划做校验、生成必要的用户确认项，并在需要时进一步检查候选列的全量数据。
+`FieldBindingPlan` 不是最终 SQL，也不是用户确认结果。它表达的是 Agent 对“加工规则所需来源”和“Excel 原始列”之间关系的识别结论。后续工具会基于该计划做校验、用户确认生成、全量数据检查和 SQL 上下文准备。
 
-以下规则类型均必须参与字段绑定：
+以下规则类型均参与字段绑定：
 
 - `DIRECT_MAPPING`
 - `EXPR`
@@ -235,18 +235,22 @@ accept_template_recognition(taskId, templateRecognitionResult)
 
 字段绑定项状态含义：
 
-- `CONFIRMED`：已确定使用某个 Excel 原始列，且可跳过用户确认。
-- `NEEDS_CONFIRMATION`：找到了语义相近的 Excel 原始列候选，但仍需后续工具或用户确认。
-- `MISSING`：没有可靠可映射的 Excel 原始列。
+- `CONFIRMED`：Agent 已经可以确定目标字段的取值逻辑。
+- `NEEDS_CONFIRMATION`：Agent 发现了可能的候选来源或取值逻辑，但仍需要后续工具或用户确认。
+- `MISSING`：Agent 无法确定目标字段的可靠取值来源或取值逻辑。
 
 生成规则：
 
-- 对 `DIRECT_MAPPING` 和 `EXPR`，必须覆盖规则声明的全部 `sourceColumns`；`sourceColumn` 等于对应的单个规则源字段。
-- 对 `DIRECT_MAPPING` 和 `EXPR`，如果能唯一确定 Excel 原始列，使用 `CONFIRMED`；如果存在语义相近候选列，使用 `NEEDS_CONFIRMATION`；如果没有可靠候选列，使用 `MISSING`。
-- 对 `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT`，必须为每条规则生成一个绑定项；Agent 根据规则的 `targetColumn` 语义在 Excel 原始表头中寻找最相近的原始列。
-- 对 `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT`，找到候选列时，`sourceColumn` 填写该 Excel 原始列名，状态使用 `NEEDS_CONFIRMATION`，不得直接使用 `CONFIRMED`；没有可靠候选列时，`sourceColumn` 置空，状态使用 `MISSING`。
-- 对 `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT`，后续代码会读取候选列全量数据并判断是否可更新为 `CONFIRMED`。
+- `DIRECT_MAPPING` 表示目标列与规则源字段一对一映射。每条 `DIRECT_MAPPING` 规则应只有一个来源语义，`sourceColumn` 使用该规则声明的单个 `sourceColumns` 值。
+- 对 `DIRECT_MAPPING`，如果能唯一确定对应 Excel 原始列，使用 `CONFIRMED`；如果存在不确定候选，使用 `NEEDS_CONFIRMATION`；如果找不到可靠来源，使用 `MISSING`。
+- `EXPR` 表示目标列由一个或多个规则源字段经过函数、条件分支、枚举映射、拼接、格式化等逻辑生成。每条 `EXPR` 规则生成一个 `FieldBindingItem`。
+- 对 `EXPR`，如果规则依赖多个 `sourceColumns`，`sourceColumn` 使用这些源字段按逗号拼接后的字符串，例如 `source_a,source_b`。Agent 必须整体理解这些源字段与表达式逻辑的关系，再判断上传 Excel 是否存在可用于该表达式的原始列来源。
+- 对 `EXPR`，如果表达式所需来源能够从 Excel 中明确取得，使用 `CONFIRMED`；如果存在不确定候选，使用 `NEEDS_CONFIRMATION`；如果关键来源缺失，使用 `MISSING`。
+- `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT` 表示目标列通常需要用户选择或输入固定值，但 Agent 仍应检查上传 Excel 中是否已经存在与该目标列语义相近的原始列。
+- 对 `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT`，如果找到语义相近的 Excel 原始列，`sourceColumn` 填写该 Excel 原始列名，状态使用 `NEEDS_CONFIRMATION`；后续代码会读取该列全量数据并判断是否可以更新为 `CONFIRMED`。
+- 对 `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT`，如果没有找到可靠 Excel 原始列，`sourceColumn` 置空，状态使用 `MISSING`，后续工具再决定是否生成用户确认项。
 - 所有 `selectedHeader` 和 `candidateHeaders` 必须来自本次 Excel 的 `sourceHeaders`，不得编造列名。
+- Agent 不得为了满足格式而强行匹配语义不可靠的列；不确定就使用 `NEEDS_CONFIRMATION`，找不到就使用 `MISSING`。
 
 字段绑定计划结构如下：
 
@@ -256,7 +260,7 @@ accept_template_recognition(taskId, templateRecognitionResult)
     {
       "targetColumn": "目标列",
       "ruleType": "DIRECT_MAPPING、EXPR、USER_CONFIRM_OPTION 或 USER_CONFIRM_INPUT",
-      "sourceColumn": "规则源字段；对于 USER_CONFIRM_OPTION 或 USER_CONFIRM_INPUT，使用语义最相近的 Excel 原始列名，找不到则置空",
+      "sourceColumn": "规则源字段；EXPR 多源字段时使用逗号拼接；USER_CONFIRM_OPTION 或 USER_CONFIRM_INPUT 找到候选 Excel 列时使用该 Excel 原始列名，找不到则置空",
       "bindingDisplayName": "给前端展示的字段语义、规则源名称或规则说明",
       "status": "CONFIRMED、NEEDS_CONFIRMATION 或 MISSING",
       "selectedHeader": "仅 CONFIRMED 时填写，必须是 Excel 原始表头",
@@ -269,14 +273,13 @@ accept_template_recognition(taskId, templateRecognitionResult)
 
 补充规则：
 
-- `FieldBindingPlan.items` 必须覆盖加工规则中所有 `DIRECT_MAPPING` 和 `EXPR` 规则声明的全部 `sourceColumns`。
-- `FieldBindingPlan.items` 必须覆盖加工规则中所有 `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT` 规则。
-- 所有 `selectedHeader` 和 `candidateHeaders` 必须来自本次 Excel 的 `sourceHeaders`。
-- 如果没有可靠候选列，必须使用 `MISSING`，不得编造列名。
-- 对 `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT`，Agent 不得生成 `CONFIRMED`。
+- `FieldBindingPlan.items` 应覆盖所有需要从 Excel 原始列取值或可能从 Excel 原始列取值的规则。
+- 对 `DIRECT_MAPPING`，不要省略该目标列的绑定判断。
+- 对 `EXPR`，不要把多个源字段拆成多个 `FieldBindingItem`；同一条 `EXPR` 规则只生成一个绑定项。
+- 对 `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT`，即使找不到 Excel 来源，也应生成绑定项并标记为 `MISSING`，便于后续工具决定是否生成确认项。
 - `bindingDisplayName` 仅用于前端展示，不参与字段绑定唯一性判断。
-- 如果 `EXPR` 规则的同一目标列依赖多个 `sourceColumns`，并且加工规则中存在 `ruleGuide`，则该目标列下每个 `FieldBindingItem.bindingDisplayName` 使用 `ruleGuide`。
-- 如果是 `DIRECT_MAPPING`，或只是日期格式化、数值处理等单一原始列加工，`bindingDisplayName` 使用对应的 `sourceColumn`。
+- 如果 `EXPR` 规则中存在 `ruleGuide`，`bindingDisplayName` 优先使用 `ruleGuide`。
+- 如果是 `DIRECT_MAPPING`，`bindingDisplayName` 使用对应的 `sourceColumn`。
 - 如果是 `USER_CONFIRM_OPTION` 或 `USER_CONFIRM_INPUT`，`bindingDisplayName` 使用 `targetColumn` 或简短中文字段语义说明。
 
 ### 第 4 步：提交字段绑定计划
