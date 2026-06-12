@@ -424,7 +424,7 @@ SQL 安全规则：
 SQL 片段计划生成后，必须调用：
 
 ```text
-execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)
+execute_processing_plan(taskId, processingPlanDsl)
 ```
 
 该工具内部负责：
@@ -432,16 +432,21 @@ execute_processing_plan(taskId, sqlGenerationContext, processingPlanDsl)
 - 校验 `processingPlanDsl` 完整性。
 - 基于 `taskId` 从任务状态重建 DSL 校验上下文，不接受 Agent 传入模板、规则、字段绑定计划或用户确认结果作为校验依据。
 - 校验所有 SQL 表达式片段安全性。
-- 使用 `sqlGenerationContext.resultTable` 作为结果表。
-- 使用 `sqlGenerationContext.stagingTable` 作为来源临时表。
+- 使用任务状态中的 `sqlGenerationContext.resultTable` 作为结果表。
+- 使用任务状态中的 `sqlGenerationContext.stagingTable` 作为来源临时表。
 - 拼接完整 `insert into ... select ... from ...` SQL。
-- 返回拼接后的完整 SQL 和校验通过的计划。
+- 执行或渲染加工 SQL，并返回结果表写入状态、拼接后的完整 SQL、校验通过的计划或数据库错误信息。
 
 根据工具返回分支：
 
 - 如果工具返回 `RESULT_TABLE_WRITTEN` 或返回内容能够明确证明结果表已写入，并且存在最终 `resultTable`，进入第 10 步。
 - 如果工具仅返回完整 SQL，响应阶段必须使用 `PROCESSING_SQL_RENDERED`，必须将 SQL 放入响应的 `summary.insertSelectSql`，并说明当前结果表写入尚未完成；此时不得进入第 10 步。
-- 如果返回 `FAILED` 或工具报错，必须立即返回失败响应。
+- 如果工具返回数据库执行失败信息，Agent 必须把该错误当作新的上下文，而不是立即失败。Agent 需要读取错误类型、错误消息、失败 SQL、失败目标列和相关字段，判断失败是否由某个目标列表达式过度加工、类型假设不成立、函数不兼容、脏数据或格式不稳定导致。
+- 能定位到失败目标列时，Agent 应只降级该目标列的表达式，尽量保留其它目标列已经正确的加工逻辑。降级的目标是让任务产出可落库、可导出的结果，而不是继续追求该列一次性加工完美。
+- 降级重写 `processingPlanDsl` 时，应优先使用更保守、更少假设的表达式：去掉高风险函数、强制类型转换、格式化、复杂条件分支或易受脏数据影响的加工；如果存在对应原始 `elasticColumn`，优先直接写入原始字段，让用户在导出文件中自行处理该列。
+- 如果无法确定具体失败列，但错误明显来自表达式复杂度或数据格式不稳定，Agent 应按风险从高到低逐步简化相关表达式，并再次调用 `execute_processing_plan(taskId, processingPlanDsl)`。
+- SQL 重试最多执行两次。第二次仍失败，或工具返回信息不足以判断可降级方向时，必须调用 `mark_task_failed` 返回明确失败原因，并在原因中说明已尝试保守降级。
+- Agent 不得为了规避错误而编造数据、编造字段、忽略必填目标列或伪造结果表写入成功。
 - 不得在工具返回后自行修改完整 SQL 或执行结果。
 
 ### 第 10 步：基于结果表导出新的 Excel 文件
