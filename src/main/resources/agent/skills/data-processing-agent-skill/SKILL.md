@@ -261,7 +261,7 @@ accept_template_recognition(taskId, templateRecognitionResult)
       "targetColumn": "目标列",
       "ruleType": "DIRECT_MAPPING、EXPR、USER_CONFIRM_OPTION 或 USER_CONFIRM_INPUT",
       "sourceColumn": "规则源字段；EXPR 多源字段时使用逗号拼接；USER_CONFIRM_OPTION 或 USER_CONFIRM_INPUT 找到候选 Excel 列时使用该 Excel 原始列名，找不到则置空",
-      "bindingDisplayName": "给前端展示的字段语义、规则源名称或规则说明",
+      "bindingDisplayName": "给前端展示的字段语义、规则源名称或规则说明。如果 `EXPR` 规则优先使用 `ruleGuide`，否则使用sourceColumn或置空",
       "status": "CONFIRMED、NEEDS_CONFIRMATION 或 MISSING",
       "selectedHeader": "仅 CONFIRMED 时填写，必须是 Excel 原始表头",
       "candidateHeaders": ["仅 NEEDS_CONFIRMATION 时填写，必须来自 Excel 原始表头"],
@@ -273,14 +273,8 @@ accept_template_recognition(taskId, templateRecognitionResult)
 
 补充规则：
 
-- `FieldBindingPlan.items` 应覆盖所有需要从 Excel 原始列取值或可能从 Excel 原始列取值的规则。
-- 对 `DIRECT_MAPPING`，不要省略该目标列的绑定判断。
-- 对 `EXPR`，不要把多个源字段拆成多个 `FieldBindingItem`；同一条 `EXPR` 规则只生成一个绑定项。
+- `FieldBindingPlan.items` 应覆盖所有加工规则中的targetColumn。
 - 对 `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT`，即使找不到 Excel 来源，也应生成绑定项并标记为 `MISSING`，便于后续工具决定是否生成确认项。
-- `bindingDisplayName` 仅用于前端展示，不参与字段绑定唯一性判断。
-- 如果 `EXPR` 规则中存在 `ruleGuide`，`bindingDisplayName` 优先使用 `ruleGuide`。
-- 如果是 `DIRECT_MAPPING`，`bindingDisplayName` 使用对应的 `sourceColumn`。
-- 如果是 `USER_CONFIRM_OPTION` 或 `USER_CONFIRM_INPUT`，`bindingDisplayName` 使用 `targetColumn` 或简短中文字段语义说明。
 
 ### 第 4 步：提交字段绑定计划
 
@@ -290,34 +284,13 @@ accept_template_recognition(taskId, templateRecognitionResult)
 accept_field_binding_plan(taskId, fieldBindingPlan)
 ```
 
-该工具内部负责：
-
-- 校验字段绑定计划。
-- 保存字段绑定计划。
-- 根据 `NEEDS_CONFIRMATION` 生成字段映射确认项。
-- 根据 `USER_CONFIRM_OPTION` 规则生成值集选择确认项。
-- 根据 `USER_CONFIRM_INPUT` 规则生成手工输入确认项。
-- 检查标准模板必填字段：如果没有可靠映射列，生成手工输入确认项。
-- 检查标准模板必填字段：如果存在映射列但映射列存在空值，生成手工输入确认项。
-
-必填字段空值硬规则：
-
-- 如果必填字段存在映射列但该列有空值，必须要求用户输入固定值。
-- 用户输入后，后续结果表 SQL 中该字段整列都使用用户输入值。
-- 这是全量覆盖，不是只覆盖空值行。
+该工具内部负责校验和保存字段绑定计划。
 
 根据工具返回分支：
 
-- 如果返回 `USER_CONFIRMATION_REQUIRED`，必须立即返回该响应，不得继续执行。
+- 如果返回 `USER_CONFIRMATION_REQUIRED`，必须立即返回该工具响应，不得继续执行。
 - 如果返回 `USER_CONFIRMED`，进入第 6 步。
-- 如果返回 `FAILED`，必须立即返回该响应。
-
-前端确认视图硬规则：
-
-- `accept_field_binding_plan` 返回 `USER_CONFIRMATION_REQUIRED` 时，工具已经完成 `fieldBindingPlan` 和 `confirmationItems` 的保存，最终响应必须原样保留工具返回的 `fieldBindingPlan` 和 `confirmationItems`。
-- 最终响应中的 `confirmationItems` 必须完整包含字段映射确认、值集选择确认和手工输入确认，不得因为内容较长而省略、摘要、改名或置空。
-- 字段明确映射和模糊映射来自已保存的 `fieldBindingPlan`；前端展示字段绑定来源时优先使用 `bindingDisplayName`，内部定位和后续加工仍使用 `sourceColumn`。字段映射确认、值集选择确认和手工输入确认来自已保存的 `confirmationItems`。这些结构供前端展示确认页面使用。
-- 如果存在任何待用户确认项，最终响应阶段必须是 `USER_CONFIRMATION_REQUIRED`，不得继续调用确认后工具。
+- 如果返回 `FAILED`，必须立即返回该工具响应。
 
 ### 第 5 步：处理用户确认提交
 
