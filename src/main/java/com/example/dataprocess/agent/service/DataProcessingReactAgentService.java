@@ -239,7 +239,7 @@ public class DataProcessingReactAgentService {
                     "TOOL_CALL",
                     taskId,
                     node,
-                    textOrDefault(message, "\u6a21\u578b\u8bf7\u6c42\u8c03\u7528\u5de5\u5177\u3002"),
+                    "\u6a21\u578b\u8bf7\u6c42\u8c03\u7528\u5de5\u5177\u3002",
                     Map.of(
                             "outputType", outputTypeName(output),
                             "toolCalls", message.getToolCalls()
