@@ -222,8 +222,8 @@ public class DataProcessingReactAgentService {
                     taskId,
                     node,
                     visibleAnnotation(
-                            "\u5de5\u5177\u8c03\u7528",
-                            textOrDefault(message, "\u6a21\u578b\u8bf7\u6c42\u8c03\u7528\u5de5\u5177\u3002")
+                            VisibleStreamText.TOOL_CALL,
+                            textOrDefault(message, VisibleStreamText.TOOL_CALL.defaultContent())
                     )
             );
             if (visibleText != null && !visibleText.isBlank()) {
@@ -239,9 +239,10 @@ public class DataProcessingReactAgentService {
                     "TOOL_CALL",
                     taskId,
                     node,
-                    "\u6a21\u578b\u8bf7\u6c42\u8c03\u7528\u5de5\u5177\u3002",
+                    VisibleStreamText.TOOL_CALL.defaultContent(),
                     Map.of(
                             "outputType", outputTypeName(output),
+                            "visibleTextKey", VisibleStreamText.TOOL_CALL.key(),
                             "toolCalls", message.getToolCalls()
                     ),
                     message
@@ -293,11 +294,11 @@ public class DataProcessingReactAgentService {
         List<String> toolNames = message.getResponses().stream()
                 .map(ToolResponseMessage.ToolResponse::name)
                 .toList();
-        String content = "\u5de5\u5177\u8c03\u7528\u5b8c\u6210: " + String.join(", ", toolNames);
+        String content = VisibleStreamText.TOOL_RESULT.defaultContent(String.join(", ", toolNames));
         String visibleText = thinkVisibleTextAdapter.adapt(
                 taskId,
                 node,
-                visibleAnnotation("\u5de5\u5177\u7ed3\u679c", content)
+                visibleAnnotation(VisibleStreamText.TOOL_RESULT, content)
         );
         List<AssistantMessage> messages = new ArrayList<>();
         if (visibleText != null && !visibleText.isBlank()) {
@@ -316,6 +317,7 @@ public class DataProcessingReactAgentService {
                 content,
                 Map.of(
                         "outputType", outputTypeName(output),
+                        "visibleTextKey", VisibleStreamText.TOOL_RESULT.key(),
                         "toolNames", toolNames
                 )
         ));
@@ -505,8 +507,40 @@ public class DataProcessingReactAgentService {
         return text == null || text.isBlank() ? defaultText : text;
     }
 
-    private String visibleAnnotation(String title, String content) {
-        return "<think>\n[%s]\n%s\n</think>".formatted(title, content == null ? "" : content);
+    private String visibleAnnotation(VisibleStreamText text, String content) {
+        return "<think>\n[%s]\n%s\n</think>".formatted(text.defaultTitle(), content == null ? "" : content);
+    }
+
+    private enum VisibleStreamText {
+
+        TOOL_CALL("agent.visible.toolCall", "\u5de5\u5177\u8c03\u7528", "\u6a21\u578b\u8bf7\u6c42\u8c03\u7528\u5de5\u5177\u3002"),
+        TOOL_RESULT("agent.visible.toolResult", "\u5de5\u5177\u7ed3\u679c", "\u5de5\u5177\u8c03\u7528\u5b8c\u6210: %s");
+
+        private final String key;
+        private final String defaultTitle;
+        private final String defaultContent;
+
+        VisibleStreamText(String key, String defaultTitle, String defaultContent) {
+            this.key = key;
+            this.defaultTitle = defaultTitle;
+            this.defaultContent = defaultContent;
+        }
+
+        private String key() {
+            return key;
+        }
+
+        private String defaultTitle() {
+            return defaultTitle;
+        }
+
+        private String defaultContent() {
+            return defaultContent;
+        }
+
+        private String defaultContent(Object... args) {
+            return defaultContent.formatted(args);
+        }
     }
 
     private String writeJson(Object value) {
