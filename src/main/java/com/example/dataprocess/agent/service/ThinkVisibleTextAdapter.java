@@ -11,6 +11,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>The adapter is intentionally presentation-only: it should be applied when
  * building outbound stream events, not to the agent's internal message history.
+ * It opens one visible <think> block per thought/action segment and keeps that
+ * block open across subsequent chunks until a segment boundary is reached.
  */
 @Component
 public class ThinkVisibleTextAdapter {
@@ -23,13 +25,12 @@ public class ThinkVisibleTextAdapter {
     private final Map<String, ParseState> states = new ConcurrentHashMap<>();
 
     /**
-     * Converts one streamed model text fragment into one or more complete
-     * <think> blocks that the existing frontend can render.
+     * Converts one streamed model text fragment into frontend-compatible text.
      *
      * <p>Fragments outside the original <think> block are treated as visible
-     * action text and wrapped in a synthetic <think> block. Parser state is kept
-     * per task and node so split tags, such as {@code <thi} + {@code nk>}, can
-     * be recognized across chunks.
+     * action text and wrapped in a synthetic <think> segment. Parser state is
+     * kept per task and node so split tags, such as {@code <thi} + {@code nk>},
+     * can be recognized across chunks.
      *
      * @param taskId task-scoped stream id
      * @param node graph node that produced the text
@@ -45,6 +46,52 @@ public class ThinkVisibleTextAdapter {
         synchronized (state) {
             return adaptWithState(state, text);
         }
+    }
+
+    /**
+     * Closes the currently open visible segment for the given task/node, if any.
+     *
+     * <p>Use this before non-model events such as tool calls so an action segment
+     * does not stay open after the model stops emitting text for that step.
+     *
+     * @param taskId task-scoped stream id
+     * @param node graph node that produced the text
+     * @return a closing tag when a visible segment was open, otherwise an empty string
+     */
+    public String closeOpenSegment(String taskId, String node) {
+        ParseState state = states.get(stateKey(taskId, node));
+        if (state == null) {
+            return "";
+        }
+        synchronized (state) {
+            return closeVisibleSegment(state);
+        }
+    }
+
+    /**
+     * Closes all currently open visible segments for a task.
+     *
+     * <p>This is used before the final response so the frontend does not keep a
+     * synthetic action segment open when the model stream ends without another
+     * explicit boundary.
+     *
+     * @param taskId task id whose open segments should be closed
+     * @return concatenated closing tags for open segments, or an empty string
+     */
+    public String closeTaskSegments(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return "";
+        }
+        String prefix = taskId + KEY_SEPARATOR;
+        StringBuilder output = new StringBuilder();
+        states.forEach((key, state) -> {
+            if (key.startsWith(prefix)) {
+                synchronized (state) {
+                    output.append(closeVisibleSegment(state));
+                }
+            }
+        });
+        return output.toString();
     }
 
     /**
@@ -82,42 +129,64 @@ public class ThinkVisibleTextAdapter {
         int index = 0;
         while (index < processable.length()) {
             if (processable.startsWith(OPEN_TAG, index)) {
+                output.append(closeVisibleSegment(state));
+                output.append(openVisibleSegment(state));
                 state.insideThink = true;
-                state.actionPrefixEmitted = false;
                 index += OPEN_TAG.length();
                 continue;
             }
             if (processable.startsWith(CLOSE_TAG, index)) {
-                state.insideThink = false;
-                state.actionPrefixEmitted = false;
+                output.append(closeVisibleSegment(state));
                 index += CLOSE_TAG.length();
                 continue;
             }
 
             int nextTagIndex = nextTagIndex(processable, index);
             String content = processable.substring(index, nextTagIndex);
-            appendVisibleBlock(output, state, content);
+            appendVisibleContent(output, state, content);
             index = nextTagIndex;
         }
         return output.toString();
     }
 
     /**
-     * Emits a complete <think> block for content that should be visible to the
-     * current frontend.
+     * Emits content into the current visible segment. A new synthetic action
+     * segment is opened only when action text first appears.
      */
-    private void appendVisibleBlock(StringBuilder output, ParseState state, String content) {
+    private void appendVisibleContent(StringBuilder output, ParseState state, String content) {
         if (content == null || content.isEmpty()) {
             return;
         }
 
-        String visibleContent = content;
-        if (!state.insideThink && containsNonWhitespace(content) && !state.actionPrefixEmitted) {
-            visibleContent = ACTION_PREFIX + content;
-            state.actionPrefixEmitted = true;
+        if (state.insideThink) {
+            output.append(content);
+            return;
         }
 
-        output.append(OPEN_TAG).append(visibleContent).append(CLOSE_TAG);
+        if (!state.visibleSegmentOpen && containsNonWhitespace(content)) {
+            output.append(OPEN_TAG).append(ACTION_PREFIX);
+            state.visibleSegmentOpen = true;
+        }
+        if (state.visibleSegmentOpen) {
+            output.append(content);
+        }
+    }
+
+    private String openVisibleSegment(ParseState state) {
+        if (state.visibleSegmentOpen) {
+            return "";
+        }
+        state.visibleSegmentOpen = true;
+        return OPEN_TAG;
+    }
+
+    private String closeVisibleSegment(ParseState state) {
+        if (!state.visibleSegmentOpen) {
+            return "";
+        }
+        state.visibleSegmentOpen = false;
+        state.insideThink = false;
+        return CLOSE_TAG;
     }
 
     /**
@@ -187,7 +256,7 @@ public class ThinkVisibleTextAdapter {
 
         private boolean insideThink;
 
-        private boolean actionPrefixEmitted;
+        private boolean visibleSegmentOpen;
 
         private String pendingTagPrefix = "";
 

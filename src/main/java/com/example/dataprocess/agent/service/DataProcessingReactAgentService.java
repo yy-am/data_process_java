@@ -97,12 +97,16 @@ public class DataProcessingReactAgentService {
                                         latestState
                                 )))
                                 .map(message -> toStreamEvent(taskId, message)),
-                        Flux.defer(() -> Flux.just(toStreamEvent(taskId, toFinalMessage(
-                                request,
-                                parsedFileRef,
-                                latestAssistantMessage.get(),
-                                latestState.get()
-                        ))))
+                        Flux.defer(() -> Flux.fromIterable(toClosingAndFinalMessages(
+                                        request,
+                                        parsedFileRef,
+                                        latestAssistantMessage.get(),
+                                        latestState.get()
+                                ))
+                                .map(message -> toStreamEvent(
+                                        taskId,
+                                        message
+                                )))
                 ).onErrorResume(ex -> Flux.just(toStreamEvent(
                         taskId,
                         toErrorMessage(request, parsedFileRef, ex)
@@ -208,6 +212,31 @@ public class DataProcessingReactAgentService {
             AssistantMessage message
     ) {
         List<AssistantMessage> messages = new ArrayList<>();
+        if (message.hasToolCalls()) {
+            String closingText = thinkVisibleTextAdapter.closeOpenSegment(taskId, node);
+            if (!closingText.isBlank()) {
+                messages.add(assistantMessage(
+                        "MODEL_DELTA",
+                        taskId,
+                        node,
+                        closingText,
+                        Map.of("outputType", outputTypeName(output))
+                ));
+            }
+            messages.add(assistantMessage(
+                    "TOOL_CALL",
+                    taskId,
+                    node,
+                    textOrDefault(message, "\u6a21\u578b\u8bf7\u6c42\u8c03\u7528\u5de5\u5177\u3002"),
+                    Map.of(
+                            "outputType", outputTypeName(output),
+                            "toolCalls", message.getToolCalls()
+                    ),
+                    message
+            ));
+            return messages;
+        }
+
         String text = thinkVisibleTextAdapter.adapt(taskId, node, message.getText());
         if (text != null && !text.isBlank()) {
             messages.add(assistantMessage(
@@ -219,6 +248,27 @@ public class DataProcessingReactAgentService {
                     message
             ));
         }
+        return messages;
+    }
+
+    private List<AssistantMessage> toClosingAndFinalMessages(
+            DataProcessingTaskRequest request,
+            String parsedFileRef,
+            AssistantMessage latestAssistantMessage,
+            OverAllState latestState
+    ) {
+        List<AssistantMessage> messages = new ArrayList<>();
+        String closingText = thinkVisibleTextAdapter.closeTaskSegments(request.taskId());
+        if (!closingText.isBlank()) {
+            messages.add(assistantMessage(
+                    "MODEL_DELTA",
+                    request.taskId(),
+                    null,
+                    closingText,
+                    Map.of("outputType", OutputType.AGENT_MODEL_STREAMING.name())
+            ));
+        }
+        messages.add(toFinalMessage(request, parsedFileRef, latestAssistantMessage, latestState));
         return messages;
     }
 
@@ -398,6 +448,11 @@ public class DataProcessingReactAgentService {
             builder.media(source.getMedia());
         }
         return builder.build();
+    }
+
+    private String textOrDefault(AssistantMessage message, String defaultText) {
+        String text = message.getText();
+        return text == null || text.isBlank() ? defaultText : text;
     }
 
     private String writeJson(Object value) {
