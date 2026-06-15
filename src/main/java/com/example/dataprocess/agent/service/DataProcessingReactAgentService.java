@@ -244,8 +244,7 @@ public class DataProcessingReactAgentService {
                             "outputType", outputTypeName(output),
                             "visibleTextKey", VisibleStreamText.TOOL_CALL.key(),
                             "toolCalls", message.getToolCalls()
-                    ),
-                    message
+                    )
             ));
             return messages;
         }
