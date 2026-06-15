@@ -84,7 +84,7 @@ public class DataProcessingReactAgentService {
                 );
 
                 mainEvents = Flux.concat(
-                        Flux.just(toStreamEvent(taskId, assistantMessage(
+                        Flux.just(toStreamEvent(taskId, streamMessage(
                                 "START",
                                 taskId,
                                 null,
@@ -184,7 +184,7 @@ public class DataProcessingReactAgentService {
         return trimmed;
     }
 
-    private List<AssistantMessage> toAssistantMessages(
+    private List<StreamMessage> toAssistantMessages(
             String taskId,
             NodeOutput output,
             AtomicReference<AssistantMessage> latestAssistantMessage,
@@ -210,13 +210,13 @@ public class DataProcessingReactAgentService {
         return List.of();
     }
 
-    private List<AssistantMessage> assistantMessages(
+    private List<StreamMessage> assistantMessages(
             String taskId,
             String node,
             StreamingOutput<?> output,
             AssistantMessage message
     ) {
-        List<AssistantMessage> messages = new ArrayList<>();
+        List<StreamMessage> messages = new ArrayList<>();
         if (message.hasToolCalls()) {
             String visibleText = thinkVisibleTextAdapter.adapt(
                     taskId,
@@ -227,7 +227,7 @@ public class DataProcessingReactAgentService {
                     )
             );
             if (visibleText != null && !visibleText.isBlank()) {
-                messages.add(assistantMessage(
+                messages.add(streamMessage(
                         "MODEL_DELTA",
                         taskId,
                         node,
@@ -235,7 +235,7 @@ public class DataProcessingReactAgentService {
                         Map.of("outputType", outputTypeName(output))
                 ));
             }
-            messages.add(assistantMessage(
+            messages.add(streamMessage(
                     "TOOL_CALL",
                     taskId,
                     node,
@@ -251,28 +251,27 @@ public class DataProcessingReactAgentService {
 
         String text = thinkVisibleTextAdapter.adapt(taskId, node, message.getText());
         if (text != null && !text.isBlank()) {
-            messages.add(assistantMessage(
+            messages.add(streamMessage(
                     output.getOutputType() == OutputType.AGENT_MODEL_STREAMING ? "MODEL_DELTA" : "MODEL_MESSAGE",
                     taskId,
                     node,
                     text,
-                    Map.of("outputType", outputTypeName(output)),
-                    message
+                    Map.of("outputType", outputTypeName(output))
             ));
         }
         return messages;
     }
 
-    private List<AssistantMessage> toClosingAndFinalMessages(
+    private List<StreamMessage> toClosingAndFinalMessages(
             DataProcessingTaskRequest request,
             String parsedFileRef,
             AssistantMessage latestAssistantMessage,
             OverAllState latestState
     ) {
-        List<AssistantMessage> messages = new ArrayList<>();
+        List<StreamMessage> messages = new ArrayList<>();
         String closingText = thinkVisibleTextAdapter.closeTaskSegments(request.taskId());
         if (!closingText.isBlank()) {
-            messages.add(assistantMessage(
+            messages.add(streamMessage(
                     "MODEL_DELTA",
                     request.taskId(),
                     null,
@@ -284,7 +283,7 @@ public class DataProcessingReactAgentService {
         return messages;
     }
 
-    private List<AssistantMessage> toolResponseMessages(
+    private List<StreamMessage> toolResponseMessages(
             String taskId,
             String node,
             StreamingOutput<?> output,
@@ -299,9 +298,9 @@ public class DataProcessingReactAgentService {
                 node,
                 visibleAnnotation(VisibleStreamText.TOOL_RESULT, content)
         );
-        List<AssistantMessage> messages = new ArrayList<>();
+        List<StreamMessage> messages = new ArrayList<>();
         if (visibleText != null && !visibleText.isBlank()) {
-            messages.add(assistantMessage(
+            messages.add(streamMessage(
                     "MODEL_DELTA",
                     taskId,
                     node,
@@ -309,7 +308,7 @@ public class DataProcessingReactAgentService {
                     Map.of("outputType", outputTypeName(output))
             ));
         }
-        messages.add(assistantMessage(
+        messages.add(streamMessage(
                 "TOOL_RESULT",
                 taskId,
                 node,
@@ -323,7 +322,7 @@ public class DataProcessingReactAgentService {
         return messages;
     }
 
-    private AssistantMessage toFinalMessage(
+    private StreamMessage toFinalMessage(
             DataProcessingTaskRequest request,
             String parsedFileRef,
             AssistantMessage latestAssistantMessage,
@@ -335,7 +334,7 @@ public class DataProcessingReactAgentService {
                 latestAssistantMessage,
                 latestState
         );
-        return assistantMessage(
+        return streamMessage(
                 "FINAL",
                 request.taskId(),
                 null,
@@ -379,13 +378,13 @@ public class DataProcessingReactAgentService {
                 ));
     }
 
-    private AssistantMessage toErrorMessage(
+    private StreamMessage toErrorMessage(
             DataProcessingTaskRequest request,
             String parsedFileRef,
             Throwable ex
     ) {
         DataProcessingAgentResponse response = toFailedResponse(request, parsedFileRef, ex);
-        return assistantMessage(
+        return streamMessage(
                 "ERROR",
                 request.taskId(),
                 null,
@@ -460,45 +459,14 @@ public class DataProcessingReactAgentService {
         return output.getOutputType() == null ? "" : output.getOutputType().name();
     }
 
-    private AssistantMessage assistantMessage(
+    private StreamMessage streamMessage(
             String event,
             String taskId,
             String node,
             String content,
             Map<String, Object> metadata
     ) {
-        return assistantMessage(event, taskId, node, content, metadata, null);
-    }
-
-    private AssistantMessage assistantMessage(
-            String event,
-            String taskId,
-            String node,
-            String content,
-            Map<String, Object> metadata,
-            AssistantMessage source
-    ) {
-        Map<String, Object> mergedMetadata = new LinkedHashMap<>();
-        if (source != null && source.getMetadata() != null) {
-            mergedMetadata.putAll(source.getMetadata());
-        }
-        mergedMetadata.put("event", event);
-        mergedMetadata.put("taskId", taskId);
-        if (node != null && !node.isBlank()) {
-            mergedMetadata.put("node", node);
-        }
-        if (metadata != null) {
-            mergedMetadata.putAll(metadata);
-        }
-
-        AssistantMessage.Builder builder = AssistantMessage.builder()
-                .content(content == null ? "" : content)
-                .properties(mergedMetadata);
-        if (source != null) {
-            builder.toolCalls(source.getToolCalls());
-            builder.media(source.getMedia());
-        }
-        return builder.build();
+        return new StreamMessage(event, taskId, node, content == null ? "" : content, metadata == null ? Map.of() : metadata);
     }
 
     private String textOrDefault(AssistantMessage message, String defaultText) {
@@ -579,22 +547,20 @@ public class DataProcessingReactAgentService {
         );
     }
 
-    private DataProcessingAgentStreamEvent toStreamEvent(String taskId, AssistantMessage message) {
-        Map<String, Object> metadata = message.getMetadata() == null ? Map.of() : message.getMetadata();
-        String event = metadataValue(metadata, "event", "MESSAGE");
-        String node = metadataValue(metadata, "node", "");
+    private DataProcessingAgentStreamEvent toStreamEvent(String taskId, StreamMessage message) {
+        Map<String, Object> metadata = message.metadata() == null ? Map.of() : message.metadata();
         DataProcessingAgentResponse response = responseValue(metadata.get("response"));
         Optional<DataProcessingAgentState> currentState = stateTool.loadTaskState(taskId);
         AgentWorkflowStage stage = response != null
                 ? response.stage()
                 : currentState.map(DataProcessingAgentState::stage).orElse(null);
         return new DataProcessingAgentStreamEvent(
-                event,
+                message.event(),
                 taskId,
                 stage,
                 stage == null ? "" : stage.name(),
-                node,
-                message.getText(),
+                message.node() == null ? "" : message.node(),
+                message.content(),
                 response,
                 eventDetail(metadata)
         );
@@ -617,11 +583,6 @@ public class DataProcessingReactAgentService {
         return detail;
     }
 
-    private String metadataValue(Map<String, Object> metadata, String key, String defaultValue) {
-        Object value = metadata.get(key);
-        return value == null || value.toString().isBlank() ? defaultValue : value.toString();
-    }
-
     private String responseMessage(DataProcessingAgentState state) {
         return switch (state.stage()) {
             case RECEIVED -> "任务已接收。";
@@ -638,5 +599,14 @@ public class DataProcessingReactAgentService {
             case FAILED -> "任务失败。";
             case COMPLETED -> "任务已完成。";
         };
+    }
+
+    private record StreamMessage(
+            String event,
+            String taskId,
+            String node,
+            String content,
+            Map<String, Object> metadata
+    ) {
     }
 }
