@@ -43,19 +43,22 @@ public class DataProcessingReactAgentService {
     private final AgentStateTool stateTool;
     private final ParsedExcelFileTool parsedExcelFileTool;
     private final ObjectMapper objectMapper;
+    private final ThinkVisibleTextAdapter thinkVisibleTextAdapter;
 
     public DataProcessingReactAgentService(
             @Qualifier("dataProcessingReactAgent") ReactAgent dataProcessingReactAgent,
             AgentStreamEventPublisher eventPublisher,
             AgentStateTool stateTool,
             ParsedExcelFileTool parsedExcelFileTool,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            ThinkVisibleTextAdapter thinkVisibleTextAdapter
     ) {
         this.dataProcessingReactAgent = dataProcessingReactAgent;
         this.eventPublisher = eventPublisher;
         this.stateTool = stateTool;
         this.parsedExcelFileTool = parsedExcelFileTool;
         this.objectMapper = objectMapper;
+        this.thinkVisibleTextAdapter = thinkVisibleTextAdapter;
     }
 
     public Flux<DataProcessingAgentStreamEvent> run(DataProcessingTaskRequest request) {
@@ -110,7 +113,10 @@ public class DataProcessingReactAgentService {
 
             return Flux.merge(
                     publishedEvents,
-                    mainEvents.doFinally(signalType -> eventPublisher.complete(taskId))
+                    mainEvents.doFinally(signalType -> {
+                        eventPublisher.complete(taskId);
+                        thinkVisibleTextAdapter.clearTask(taskId);
+                    })
             );
         }).onErrorResume(ex -> Flux.just(toStreamEvent(
                 request.taskId(),
@@ -202,7 +208,7 @@ public class DataProcessingReactAgentService {
             AssistantMessage message
     ) {
         List<AssistantMessage> messages = new ArrayList<>();
-        String text = message.getText();
+        String text = thinkVisibleTextAdapter.adapt(taskId, node, message.getText());
         if (text != null && !text.isBlank()) {
             messages.add(assistantMessage(
                     output.getOutputType() == OutputType.AGENT_MODEL_STREAMING ? "MODEL_DELTA" : "MODEL_MESSAGE",
