@@ -19,6 +19,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -202,6 +203,10 @@ public class DataProcessingReactAgentService {
             return assistantMessages(taskId, output.node(), streamingOutput, assistantMessage);
         }
 
+        if (message instanceof ToolResponseMessage toolResponseMessage) {
+            return toolResponseMessages(taskId, output.node(), streamingOutput, toolResponseMessage);
+        }
+
         return List.of();
     }
 
@@ -213,13 +218,20 @@ public class DataProcessingReactAgentService {
     ) {
         List<AssistantMessage> messages = new ArrayList<>();
         if (message.hasToolCalls()) {
-            String closingText = thinkVisibleTextAdapter.closeOpenSegment(taskId, node);
-            if (!closingText.isBlank()) {
+            String visibleText = thinkVisibleTextAdapter.adapt(
+                    taskId,
+                    node,
+                    visibleAnnotation(
+                            "\u5de5\u5177\u8c03\u7528",
+                            textOrDefault(message, "\u6a21\u578b\u8bf7\u6c42\u8c03\u7528\u5de5\u5177\u3002")
+                    )
+            );
+            if (visibleText != null && !visibleText.isBlank()) {
                 messages.add(assistantMessage(
                         "MODEL_DELTA",
                         taskId,
                         node,
-                        closingText,
+                        visibleText,
                         Map.of("outputType", outputTypeName(output))
                 ));
             }
@@ -269,6 +281,44 @@ public class DataProcessingReactAgentService {
             ));
         }
         messages.add(toFinalMessage(request, parsedFileRef, latestAssistantMessage, latestState));
+        return messages;
+    }
+
+    private List<AssistantMessage> toolResponseMessages(
+            String taskId,
+            String node,
+            StreamingOutput<?> output,
+            ToolResponseMessage message
+    ) {
+        List<String> toolNames = message.getResponses().stream()
+                .map(ToolResponseMessage.ToolResponse::name)
+                .toList();
+        String content = "\u5de5\u5177\u8c03\u7528\u5b8c\u6210: " + String.join(", ", toolNames);
+        String visibleText = thinkVisibleTextAdapter.adapt(
+                taskId,
+                node,
+                visibleAnnotation("\u5de5\u5177\u7ed3\u679c", content)
+        );
+        List<AssistantMessage> messages = new ArrayList<>();
+        if (visibleText != null && !visibleText.isBlank()) {
+            messages.add(assistantMessage(
+                    "MODEL_DELTA",
+                    taskId,
+                    node,
+                    visibleText,
+                    Map.of("outputType", outputTypeName(output))
+            ));
+        }
+        messages.add(assistantMessage(
+                "TOOL_RESULT",
+                taskId,
+                node,
+                content,
+                Map.of(
+                        "outputType", outputTypeName(output),
+                        "toolNames", toolNames
+                )
+        ));
         return messages;
     }
 
@@ -453,6 +503,10 @@ public class DataProcessingReactAgentService {
     private String textOrDefault(AssistantMessage message, String defaultText) {
         String text = message.getText();
         return text == null || text.isBlank() ? defaultText : text;
+    }
+
+    private String visibleAnnotation(String title, String content) {
+        return "<think>\n[%s]\n%s\n</think>".formatted(title, content == null ? "" : content);
     }
 
     private String writeJson(Object value) {

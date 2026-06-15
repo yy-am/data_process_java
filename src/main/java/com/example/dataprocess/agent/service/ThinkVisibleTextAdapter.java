@@ -11,8 +11,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>The adapter is intentionally presentation-only: it should be applied when
  * building outbound stream events, not to the agent's internal message history.
- * It opens one visible <think> block per thought/action segment and keeps that
- * block open across subsequent chunks until a segment boundary is reached.
+ * It opens one visible <think> block for the whole task and keeps that block
+ * open across all thought/action chunks until the final response is emitted.
  */
 @Component
 public class ThinkVisibleTextAdapter {
@@ -28,9 +28,9 @@ public class ThinkVisibleTextAdapter {
      * Converts one streamed model text fragment into frontend-compatible text.
      *
      * <p>Fragments outside the original <think> block are treated as visible
-     * action text and wrapped in a synthetic <think> segment. Parser state is
-     * kept per task and node so split tags, such as {@code <thi} + {@code nk>},
-     * can be recognized across chunks.
+     * action text and prefixed with an action marker. Parser state is kept per
+     * task so split tags, such as {@code <thi} + {@code nk>}, can be recognized
+     * across chunks and nodes while the frontend sees a single visible block.
      *
      * @param taskId task-scoped stream id
      * @param node graph node that produced the text
@@ -42,56 +42,52 @@ public class ThinkVisibleTextAdapter {
             return text;
         }
 
-        ParseState state = states.computeIfAbsent(stateKey(taskId, node), ignored -> new ParseState());
+        ParseState state = states.computeIfAbsent(stateKey(taskId), ignored -> new ParseState());
         synchronized (state) {
             return adaptWithState(state, text);
         }
     }
 
     /**
-     * Closes the currently open visible segment for the given task/node, if any.
+     * Closes the task-level visible block, if it has been opened.
      *
-     * <p>Use this before non-model events such as tool calls so an action segment
-     * does not stay open after the model stops emitting text for that step.
+     * <p>This method is kept for call sites that close a stream explicitly, but
+     * the normal path should close only once before the final response.
      *
      * @param taskId task-scoped stream id
      * @param node graph node that produced the text
-     * @return a closing tag when a visible segment was open, otherwise an empty string
+     * @return a closing tag when the visible block was open, otherwise an empty string
      */
     public String closeOpenSegment(String taskId, String node) {
-        ParseState state = states.get(stateKey(taskId, node));
+        ParseState state = states.get(stateKey(taskId));
         if (state == null) {
             return "";
         }
         synchronized (state) {
-            return closeVisibleSegment(state);
+            return closeVisibleBlock(state);
         }
     }
 
     /**
-     * Closes all currently open visible segments for a task.
+     * Closes the currently open visible block for a task.
      *
-     * <p>This is used before the final response so the frontend does not keep a
-     * synthetic action segment open when the model stream ends without another
-     * explicit boundary.
+     * <p>This is used before the final response so the frontend receives a
+     * single complete <think> block for the whole agent run.
      *
-     * @param taskId task id whose open segments should be closed
-     * @return concatenated closing tags for open segments, or an empty string
+     * @param taskId task id whose visible block should be closed
+     * @return a closing tag when the visible block was open, otherwise an empty string
      */
     public String closeTaskSegments(String taskId) {
         if (taskId == null || taskId.isBlank()) {
             return "";
         }
-        String prefix = taskId + KEY_SEPARATOR;
-        StringBuilder output = new StringBuilder();
-        states.forEach((key, state) -> {
-            if (key.startsWith(prefix)) {
-                synchronized (state) {
-                    output.append(closeVisibleSegment(state));
-                }
-            }
-        });
-        return output.toString();
+        ParseState state = states.get(stateKey(taskId));
+        if (state == null) {
+            return "";
+        }
+        synchronized (state) {
+            return closeVisibleBlock(state);
+        }
     }
 
     /**
@@ -107,8 +103,7 @@ public class ThinkVisibleTextAdapter {
         if (taskId == null || taskId.isBlank()) {
             return;
         }
-        String prefix = taskId + KEY_SEPARATOR;
-        states.keySet().removeIf(key -> key.startsWith(prefix));
+        states.remove(stateKey(taskId));
     }
 
     /**
@@ -129,14 +124,15 @@ public class ThinkVisibleTextAdapter {
         int index = 0;
         while (index < processable.length()) {
             if (processable.startsWith(OPEN_TAG, index)) {
-                output.append(closeVisibleSegment(state));
-                output.append(openVisibleSegment(state));
-                state.insideThink = true;
+                output.append(openVisibleBlock(state));
+                state.insideModelThink = true;
+                state.actionPrefixEmitted = false;
                 index += OPEN_TAG.length();
                 continue;
             }
             if (processable.startsWith(CLOSE_TAG, index)) {
-                output.append(closeVisibleSegment(state));
+                state.insideModelThink = false;
+                state.actionPrefixEmitted = false;
                 index += CLOSE_TAG.length();
                 continue;
             }
@@ -150,42 +146,46 @@ public class ThinkVisibleTextAdapter {
     }
 
     /**
-     * Emits content into the current visible segment. A new synthetic action
-     * segment is opened only when action text first appears.
+     * Emits content into the task-level visible block. A new action marker is
+     * emitted only when action text first appears after a model think boundary.
      */
     private void appendVisibleContent(StringBuilder output, ParseState state, String content) {
         if (content == null || content.isEmpty()) {
             return;
         }
 
-        if (state.insideThink) {
+        if (!state.visibleBlockOpen && !containsNonWhitespace(content)) {
+            return;
+        }
+
+        output.append(openVisibleBlock(state));
+        if (state.insideModelThink) {
             output.append(content);
             return;
         }
 
-        if (!state.visibleSegmentOpen && containsNonWhitespace(content)) {
-            output.append(OPEN_TAG).append(ACTION_PREFIX);
-            state.visibleSegmentOpen = true;
+        if (!state.actionPrefixEmitted && containsNonWhitespace(content)) {
+            output.append(ACTION_PREFIX);
+            state.actionPrefixEmitted = true;
         }
-        if (state.visibleSegmentOpen) {
-            output.append(content);
-        }
+        output.append(content);
     }
 
-    private String openVisibleSegment(ParseState state) {
-        if (state.visibleSegmentOpen) {
+    private String openVisibleBlock(ParseState state) {
+        if (state.visibleBlockOpen) {
             return "";
         }
-        state.visibleSegmentOpen = true;
+        state.visibleBlockOpen = true;
         return OPEN_TAG;
     }
 
-    private String closeVisibleSegment(ParseState state) {
-        if (!state.visibleSegmentOpen) {
+    private String closeVisibleBlock(ParseState state) {
+        if (!state.visibleBlockOpen) {
             return "";
         }
-        state.visibleSegmentOpen = false;
-        state.insideThink = false;
+        state.visibleBlockOpen = false;
+        state.insideModelThink = false;
+        state.actionPrefixEmitted = false;
         return CLOSE_TAG;
     }
 
@@ -238,8 +238,8 @@ public class ThinkVisibleTextAdapter {
      * Builds the state map key. The separator is a non-printing character so
      * task ids and node names cannot accidentally collide.
      */
-    private String stateKey(String taskId, String node) {
-        return safe(taskId) + KEY_SEPARATOR + safe(node);
+    private String stateKey(String taskId) {
+        return safe(taskId) + KEY_SEPARATOR;
     }
 
     /**
@@ -254,9 +254,11 @@ public class ThinkVisibleTextAdapter {
      */
     private static final class ParseState {
 
-        private boolean insideThink;
+        private boolean insideModelThink;
 
-        private boolean visibleSegmentOpen;
+        private boolean visibleBlockOpen;
+
+        private boolean actionPrefixEmitted;
 
         private String pendingTagPrefix = "";
 
