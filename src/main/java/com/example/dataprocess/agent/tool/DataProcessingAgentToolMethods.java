@@ -11,6 +11,7 @@ import com.example.dataprocess.agent.model.DataProcessingAgentState;
 import com.example.dataprocess.agent.model.FieldBindingItem;
 import com.example.dataprocess.agent.model.FieldBindingPlan;
 import com.example.dataprocess.agent.model.FieldBindingStatus;
+import com.example.dataprocess.agent.model.ParsedExcelFile;
 import com.example.dataprocess.agent.model.ParsedExcelSummary;
 import com.example.dataprocess.agent.model.RenderedProcessingSql;
 import com.example.dataprocess.agent.model.StandardRequiredFields;
@@ -27,9 +28,11 @@ import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -210,16 +213,33 @@ public class DataProcessingAgentToolMethods {
                 .withStage(AgentWorkflowStage.POST_CONFIRMATION_CONTEXT_READY)
                 .addTrace("确认后的加工上下文校验通过，可以准备 SQL 生成上下文。"));
 
-        Map<String, Object> result = baseContext(savedState);
-        result.put("templateBundle", savedState.templateBundle());
-        result.put("requiredFields", savedState.requiredFields());
-        result.put("valueSetMetadata", savedState.valueSetMetadata());
-        result.put("fieldBindingPlan", savedState.fieldBindingPlan());
-        result.put("dslBusinessContext", buildDslBusinessContext(savedState));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("stage", savedState.stage());
+        result.put("taskId", savedState.taskId());
+        result.put("presetTemplateCode", savedState.templateRecognitionResult().presetTemplateCode());
+        result.put("standardTemplateCode", savedState.templateRecognitionResult().standardTemplateCode());
+        result.put("targetColumnBusinessContext", buildPostConfirmationBusinessContext(savedState));
         result.put("readyForSqlGeneration", true);
         result.put("nextAction", nextAction(savedState));
-        result.put("agentResponse", toResponse(savedState));
         return result;
+    }
+
+    /**
+     * 暴露给模型的 SQL 上下文准备工具：从任务状态和解析文件中构造确定性的 SQL 表上下文，并写回状态。
+     */
+    @Tool(name = "prepare_sql_generation_context", description = "基于任务状态和已解析 Excel 文件，构造并保存确定性的 SQL 生成上下文。")
+    public AgentSqlGenerationContext prepareSqlGenerationContext(
+            @ToolParam(description = "任务编号") String taskId
+    ) {
+        DataProcessingAgentState state = requiredState(taskId);
+        validateSqlGenerationContextPreparation(state);
+
+        AgentSqlGenerationContext sqlGenerationContext = buildSqlGenerationContext(state);
+        stateTool.saveTaskState(state
+                .withSqlGenerationContext(sqlGenerationContext)
+                .withStage(AgentWorkflowStage.SQL_GENERATION_CONTEXT_READY)
+                .addTrace("构造并保存 SQL 生成上下文。"));
+        return sqlGenerationContext;
     }
 
     /**
@@ -229,16 +249,17 @@ public class DataProcessingAgentToolMethods {
     @Tool(name = "execute_processing_plan", description = "校验加工计划 SQL 片段并拼接完整 INSERT SELECT SQL；当前不执行数据库落表。")
     public RenderedProcessingSql executeProcessingPlan(
             @ToolParam(description = "任务编号") String taskId,
-            @ToolParam(description = "prepare_sql_generation_context 工具返回的 SQL 表上下文") AgentSqlGenerationContext sqlGenerationContext,
             @ToolParam(description = "Agent 生成的目标列 SQL 表达式片段计划") ProcessingPlanDsl processingPlanDsl
     ) {
+        DataProcessingAgentState state = requiredState(taskId);
+        AgentSqlGenerationContext sqlGenerationContext = requiredSqlGenerationContext(state);
         RenderedProcessingSql renderedSql = processingPlanSqlTool.renderInsertSelectSql(
                 taskId,
                 sqlGenerationContext,
-                buildDslGenerationContext(requiredState(taskId), sqlGenerationContext),
+                buildDslGenerationContext(state, sqlGenerationContext),
                 processingPlanDsl
         );
-        stateTool.saveTaskState(requiredState(taskId)
+        stateTool.saveTaskState(state
                 .withRenderedProcessingSql(renderedSql)
                 .withStage(AgentWorkflowStage.PROCESSING_SQL_RENDERED)
                 .addTrace("完成 SQL 片段校验并拼接完整 INSERT SELECT SQL。"));
@@ -449,6 +470,7 @@ public class DataProcessingAgentToolMethods {
         result.put("templateRecognitionResult", state.templateRecognitionResult());
         result.put("confirmationItems", state.confirmationItems());
         result.put("userConfirmationResult", state.userConfirmationResult());
+        result.put("sqlGenerationContext", state.sqlGenerationContext());
         result.put("summary", state.summary());
         return result;
     }
@@ -488,6 +510,87 @@ public class DataProcessingAgentToolMethods {
                 throw new IllegalStateException("用户确认结果不完整，期望 " + expectedKeys + "，实际 " + actualKeys);
             }
         }
+    }
+
+    private void validateSqlGenerationContextPreparation(DataProcessingAgentState state) {
+        if (state.stage() != AgentWorkflowStage.POST_CONFIRMATION_CONTEXT_READY
+                && state.stage() != AgentWorkflowStage.SQL_GENERATION_CONTEXT_READY) {
+            throw new IllegalStateException("当前阶段不能准备 SQL 生成上下文: " + state.stage());
+        }
+        validatePostConfirmationContext(state);
+        if (state.parsedFileRef() == null || state.parsedFileRef().isBlank()) {
+            throw new IllegalStateException("缺少 parsedFileRef，不能准备 SQL 生成上下文。");
+        }
+    }
+
+    private AgentSqlGenerationContext buildSqlGenerationContext(DataProcessingAgentState state) {
+        ParsedExcelFile parsedExcelFile = parsedExcelFileTool.readParsedExcelFile(state.parsedFileRef());
+        List<ActualColumnMapping> columnMappings = buildColumnMappings(parsedExcelFile.sourceHeaders());
+        return new AgentSqlGenerationContext(
+                state.taskId(),
+                buildTableName("staging", state.taskId()),
+                buildTableName("result", state.taskId()),
+                parsedExcelFile.rows() == null ? 0 : parsedExcelFile.rows().size(),
+                columnMappings
+        );
+    }
+
+    private AgentSqlGenerationContext requiredSqlGenerationContext(DataProcessingAgentState state) {
+        if (state.sqlGenerationContext() == null) {
+            throw new IllegalStateException("缺少 SQL 生成上下文，请先调用 prepare_sql_generation_context。");
+        }
+        return state.sqlGenerationContext();
+    }
+
+    private List<Map<String, Object>> buildPostConfirmationBusinessContext(DataProcessingAgentState state) {
+        Map<String, List<FieldBindingItem>> bindingByTargetColumn = safeFieldBindings(state).stream()
+                .collect(Collectors.groupingBy(
+                        FieldBindingItem::targetColumn,
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+
+        Map<String, Map<String, Object>> targetContexts = new LinkedHashMap<>();
+        for (ProcessingRuleItem ruleItem : state.templateBundle().processingRule().ruleItems()) {
+            List<FieldBindingItem> bindings = bindingByTargetColumn.getOrDefault(ruleItem.targetColumn(), List.of());
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("targetColumn", ruleItem.targetColumn());
+            item.put("ruleType", ruleItem.ruleType());
+            item.put("sourceColumns", ruleItem.sourceColumns());
+            item.put("selectedHeaders", selectedHeaders(bindings, state.userConfirmationResult()));
+            item.put("ruleGuide", ruleItem.ruleGuide());
+            item.put("example", ruleItem.example());
+            item.put("confirmedValue", confirmedValue(state.userConfirmationResult(), ruleItem.targetColumn()));
+            targetContexts.put(ruleItem.targetColumn(), item);
+        }
+
+        for (AgentConfirmationDecision decision : safeDecisions(state.userConfirmationResult())) {
+            if (decision.confirmationType() == ConfirmationType.INPUT_CONFIRMATION
+                    && !targetContexts.containsKey(decision.targetColumn())) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("targetColumn", decision.targetColumn());
+                item.put("ruleType", "USER_CONFIRM_INPUT");
+                item.put("sourceColumns", List.of());
+                item.put("selectedHeaders", List.of());
+                item.put("ruleGuide", null);
+                item.put("example", null);
+                item.put("confirmedValue", decision.inputValue());
+                targetContexts.put(decision.targetColumn(), item);
+            }
+        }
+
+        return List.copyOf(targetContexts.values());
+    }
+
+    private List<String> selectedHeaders(
+            List<FieldBindingItem> bindings,
+            List<AgentConfirmationDecision> decisions
+    ) {
+        return bindings.stream()
+                .map(binding -> selectedHeader(binding, decisions))
+                .filter(value -> value != null && !value.isBlank())
+                .distinct()
+                .toList();
     }
 
     private List<Map<String, Object>> buildDslBusinessContext(DataProcessingAgentState state) {
@@ -655,6 +758,26 @@ public class DataProcessingAgentToolMethods {
         return sqlGenerationContext == null || sqlGenerationContext.columnMappings() == null
                 ? List.of()
                 : sqlGenerationContext.columnMappings();
+    }
+
+    private List<ActualColumnMapping> buildColumnMappings(List<String> sourceHeaders) {
+        if (sourceHeaders == null || sourceHeaders.isEmpty()) {
+            return List.of();
+        }
+        List<ActualColumnMapping> mappings = new ArrayList<>(sourceHeaders.size());
+        for (int index = 0; index < sourceHeaders.size(); index++) {
+            mappings.add(new ActualColumnMapping(sourceHeaders.get(index), "col_" + (index + 1)));
+        }
+        return List.copyOf(mappings);
+    }
+
+    private String buildTableName(String prefix, String taskId) {
+        String normalizedTaskId = taskId == null ? "" : taskId.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "_");
+        normalizedTaskId = normalizedTaskId.replaceAll("^_+|_+$", "");
+        if (normalizedTaskId.isBlank()) {
+            normalizedTaskId = "task";
+        }
+        return prefix + "_" + normalizedTaskId;
     }
 
     private String nextAction(DataProcessingAgentState state) {
