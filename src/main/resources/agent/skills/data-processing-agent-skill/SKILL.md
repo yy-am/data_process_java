@@ -235,9 +235,9 @@ accept_template_recognition(taskId, templateRecognitionResult)
 
 字段绑定项状态含义：
 
-- `CONFIRMED`：Agent 已经可以确定目标字段的取值逻辑。
-- `NEEDS_CONFIRMATION`：Agent 发现了可能的候选来源或取值逻辑，但仍需要后续工具或用户确认。
-- `MISSING`：Agent 无法确定目标字段的可靠取值来源或取值逻辑。
+- `CONFIRMED`：Agent 已经可以确定本规则在字段绑定阶段所需的 Excel 来源信息。
+- `NEEDS_CONFIRMATION`：Agent 找到了候选来源，但字段来源仍不确定，需要后续工具或用户确认。
+- `MISSING`：Agent 无法找到该规则所需的可靠 Excel 来源。
 
 生成规则：
 
@@ -246,6 +246,7 @@ accept_template_recognition(taskId, templateRecognitionResult)
 - `EXPR` 表示目标列由一个或多个规则源字段经过函数、条件分支、枚举映射、拼接、格式化等逻辑生成。每条 `EXPR` 规则生成一个 `FieldBindingItem`。
 - 对 `EXPR`，如果规则依赖多个 `sourceColumns`，`sourceColumn` 使用这些源字段按逗号拼接后的字符串，例如 `source_a,source_b`。Agent 必须整体理解这些源字段与表达式逻辑的关系，再判断上传 Excel 是否存在可用于该表达式的原始列来源。
 - 对 `EXPR`，如果表达式所需来源能够从 Excel 中明确取得，使用 `CONFIRMED`；如果存在不确定候选，使用 `NEEDS_CONFIRMATION`；如果关键来源缺失，使用 `MISSING`。
+- 对 `EXPR`，第 3 步只确认表达式依赖的 Excel 来源字段，不确认最终 SQL 表达式是否完全正确。如果规则声明的 `sourceColumns` 都能在 Excel 原始表头中明确匹配，则状态应为 `CONFIRMED`，不得因为 `CASE WHEN`、函数、枚举映射或格式化逻辑仍需第 8 步生成而反复犹豫。
 - `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT` 表示目标列通常需要用户选择或输入固定值，但 Agent 仍应检查上传 Excel 中是否已经存在与该目标列语义相近的原始列。
 - 对 `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT`，如果找到语义相近的 Excel 原始列，`sourceColumn` 填写该 Excel 原始列名，状态使用 `NEEDS_CONFIRMATION`；后续代码会读取该列全量数据并判断是否可以更新为 `CONFIRMED`。
 - 对 `USER_CONFIRM_OPTION` 和 `USER_CONFIRM_INPUT`，如果没有找到可靠 Excel 原始列，`sourceColumn` 置空，状态使用 `MISSING`，后续工具再决定是否生成用户确认项。
@@ -407,6 +408,18 @@ Agent 必须作为 DWS SQL 表达式片段专家工作。生成 `expressionSql` 
 - 对于 `DIRECT_MAPPING`，`expressionSql` 必须等于对应的 `elasticColumn`。
 - 对于 `EXPR`，`expressionSql` 必须根据 `ruleGuide` 和 `example` 表达的加工意图生成；`EXPR` 不等于 `CASE WHEN`，只有存在真实条件分支、枚举映射或区间判断时才使用 `CASE WHEN`。
 - 对于数值处理、日期处理、字符串处理、空值处理、类型转换、多字段拼接等非条件分支加工，必须选择 DWS 中合适的标量函数或表达式，直接生成最小必要表达式。
+- 临时表是弹性域表，所有 `elasticColumn` 的数据库类型都是 `text`。当加工规则要求按数值、日期、时间、布尔等业务类型处理字段时，Agent 必须先将对应 `elasticColumn` 使用 `CAST` 强转为规则说明中的业务类型，再基于强转后的表达式生成函数、计算、比较、条件判断或格式化逻辑。
+- 不得直接对 `text` 类型的 `elasticColumn` 使用数值函数、日期函数、大小比较、区间判断、四则运算，或依赖业务类型的 `CASE WHEN` 条件。
+- `DIRECT_MAPPING` 且不做任何加工时，可以直接使用 `elasticColumn`，不需要 `CAST`。
+- 纯文本处理可以直接使用 `elasticColumn`，例如拼接、截取、替换、判空和文本枚举映射。
+- 如果规则说明字段是数值类型，先使用 `CAST(elasticColumn AS DECIMAL(18, 6))`，再进行数值函数、四则运算、大小比较或区间判断。
+- 如果规则说明字段是整数类型，先使用 `CAST(elasticColumn AS BIGINT)`，再进行整数计算或比较。
+- 如果规则说明字段是日期类型，先使用 `CAST(elasticColumn AS DATE)`，再进行日期函数、日期比较或日期格式化。
+- 如果规则说明字段是时间戳类型，先使用 `CAST(elasticColumn AS TIMESTAMP)`，再进行时间函数、时间比较或时间格式化。
+- 类型转换的基础模式是：`elasticColumn(text)` -> `CAST(elasticColumn AS 业务类型)` -> 加工函数或判断逻辑。不要把空字符串清洗、默认值兜底等容错逻辑混入默认转换示例；脏数据导致 `CAST` 失败时，按第 9 步 SQL 失败降级规则处理。
+- 示例：金额四舍五入应生成 `ROUND(CAST(col3 AS DECIMAL(18, 6)), 2)`，不得生成 `ROUND(col3, 2)`。
+- 示例：金额分档应生成 `CASE WHEN CAST(col3 AS DECIMAL(18, 6)) >= 10000 THEN 'HIGH' ELSE 'NORMAL' END`，不得生成 `CASE WHEN col3 >= 10000 THEN 'HIGH' ELSE 'NORMAL' END`。
+- 示例：日期格式化应生成 `TO_CHAR(CAST(col4 AS DATE), 'YYYY-MM-DD')`，不得生成 `TO_CHAR(col4, 'YYYY-MM-DD')`。
 - `example` 是语义参考，不是可直接照抄的 SQL；如果 `example` 中出现 Excel 原始表头或加工规则源字段，必须替换为对应的 `elasticColumn`。
 - `expressionSql` 只能引用当前规则允许的 `elasticColumn`，不能引用 Excel 原始表头。
 - 如果某个目标列无法根据规则、字段映射和用户确认结果生成，必须调用 `mark_task_failed`，不得编造表达式。
