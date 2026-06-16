@@ -103,10 +103,6 @@ public class DataProcessingReactAgentService {
                                         parsedFileRef,
                                         latestAssistantMessage.get(),
                                         latestState.get()
-                                ))
-                                .map(message -> toStreamEvent(
-                                        taskId,
-                                        message
                                 )))
                 ).onErrorResume(ex -> Flux.just(toStreamEvent(
                         taskId,
@@ -262,21 +258,24 @@ public class DataProcessingReactAgentService {
         return messages;
     }
 
-    private List<StreamMessage> toClosingAndFinalMessages(
+    private List<DataProcessingAgentStreamEvent> toClosingAndFinalMessages(
             DataProcessingTaskRequest request,
             String parsedFileRef,
             AssistantMessage latestAssistantMessage,
             OverAllState latestState
     ) {
-        List<StreamMessage> messages = new ArrayList<>();
+        List<DataProcessingAgentStreamEvent> messages = new ArrayList<>();
         String closingText = thinkVisibleTextAdapter.closeTaskSegments(request.taskId());
         if (!closingText.isBlank()) {
-            messages.add(streamMessage(
-                    "MODEL_DELTA",
+            messages.add(toStreamEvent(
                     request.taskId(),
-                    null,
-                    closingText,
-                    Map.of("outputType", OutputType.AGENT_MODEL_STREAMING.name())
+                    streamMessage(
+                            "MODEL_DELTA",
+                            request.taskId(),
+                            null,
+                            closingText,
+                            Map.of("outputType", OutputType.AGENT_MODEL_STREAMING.name())
+                    )
             ));
         }
         messages.add(toFinalMessage(request, parsedFileRef, latestAssistantMessage, latestState));
@@ -322,7 +321,7 @@ public class DataProcessingReactAgentService {
         return messages;
     }
 
-    private StreamMessage toFinalMessage(
+    private DataProcessingAgentStreamEvent toFinalMessage(
             DataProcessingTaskRequest request,
             String parsedFileRef,
             AssistantMessage latestAssistantMessage,
@@ -334,12 +333,15 @@ public class DataProcessingReactAgentService {
                 latestAssistantMessage,
                 latestState
         );
-        return streamMessage(
-                "FINAL",
+        return toStreamEvent(
                 request.taskId(),
-                null,
-                writeJson(response),
-                Map.of("response", response)
+                streamMessage(
+                        "FINAL",
+                        request.taskId(),
+                        null,
+                        writeJson(response),
+                        Map.of("response", response)
+                )
         );
     }
 
