@@ -335,7 +335,7 @@ public class DataProcessingReactAgentService {
         );
         return toStreamEvent(
                 request.taskId(),
-                streamMessage(
+                assistantMessage(
                         "FINAL",
                         request.taskId(),
                         null,
@@ -461,6 +461,28 @@ public class DataProcessingReactAgentService {
         return output.getOutputType() == null ? "" : output.getOutputType().name();
     }
 
+    private AssistantMessage assistantMessage(
+            String event,
+            String taskId,
+            String node,
+            String content,
+            Map<String, Object> metadata
+    ) {
+        Map<String, Object> mergedMetadata = new LinkedHashMap<>();
+        mergedMetadata.put("event", event);
+        mergedMetadata.put("taskId", taskId);
+        if (node != null && !node.isBlank()) {
+            mergedMetadata.put("node", node);
+        }
+        if (metadata != null) {
+            mergedMetadata.putAll(metadata);
+        }
+        return AssistantMessage.builder()
+                .content(content == null ? "" : content)
+                .properties(mergedMetadata)
+                .build();
+    }
+
     private StreamMessage streamMessage(
             String event,
             String taskId,
@@ -568,6 +590,27 @@ public class DataProcessingReactAgentService {
         );
     }
 
+    private DataProcessingAgentStreamEvent toStreamEvent(String taskId, AssistantMessage message) {
+        Map<String, Object> metadata = message.getMetadata() == null ? Map.of() : message.getMetadata();
+        String event = metadataValue(metadata, "event", "MESSAGE");
+        String node = metadataValue(metadata, "node", "");
+        DataProcessingAgentResponse response = responseValue(metadata.get("response"));
+        Optional<DataProcessingAgentState> currentState = stateTool.loadTaskState(taskId);
+        AgentWorkflowStage stage = response != null
+                ? response.stage()
+                : currentState.map(DataProcessingAgentState::stage).orElse(null);
+        return new DataProcessingAgentStreamEvent(
+                event,
+                taskId,
+                stage,
+                stage == null ? "" : stage.name(),
+                node,
+                message.getText(),
+                response,
+                eventDetail(metadata)
+        );
+    }
+
     private DataProcessingAgentResponse responseValue(Object value) {
         return value instanceof DataProcessingAgentResponse response ? response : null;
     }
@@ -583,6 +626,11 @@ public class DataProcessingReactAgentService {
             }
         });
         return detail;
+    }
+
+    private String metadataValue(Map<String, Object> metadata, String key, String defaultValue) {
+        Object value = metadata.get(key);
+        return value == null || value.toString().isBlank() ? defaultValue : value.toString();
     }
 
     private String responseMessage(DataProcessingAgentState state) {
