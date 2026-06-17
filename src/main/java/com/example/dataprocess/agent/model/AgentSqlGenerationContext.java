@@ -12,12 +12,14 @@ import java.util.List;
  * @param resultTable result table name, resolved by deterministic tooling
  * @param loadedRows rows loaded into the staging table
  * @param columnMappings all Excel original column to staging elastic column mappings
+ * @param targetContexts target-column contexts used by AI to generate ProcessingPlanDsl
  */
 public record AgentSqlGenerationContext(
         String taskId,
         String stagingTable,
         String resultTable,
         Integer loadedRows,
-        List<ActualColumnMapping> columnMappings
+        List<ActualColumnMapping> columnMappings,
+        List<AgentTargetColumnContext> targetContexts
 ) {
 }

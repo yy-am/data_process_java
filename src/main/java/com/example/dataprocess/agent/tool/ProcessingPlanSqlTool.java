@@ -2,10 +2,8 @@ package com.example.dataprocess.agent.tool;
 
 import com.example.dataprocess.agent.model.AgentSqlGenerationContext;
 import com.example.dataprocess.agent.model.RenderedProcessingSql;
-import com.example.dataprocess.domain.model.DslGenerationContext;
 import com.example.dataprocess.domain.model.ProcessingPlanColumn;
 import com.example.dataprocess.domain.model.ProcessingPlanDsl;
-import com.example.dataprocess.infrastructure.service.ProcessingPlanDslValidator;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -22,12 +20,6 @@ public class ProcessingPlanSqlTool {
             "[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)?"
     );
 
-    private final ProcessingPlanDslValidator processingPlanDslValidator;
-
-    public ProcessingPlanSqlTool(ProcessingPlanDslValidator processingPlanDslValidator) {
-        this.processingPlanDslValidator = processingPlanDslValidator;
-    }
-
     /**
      * Validate SQL fragments and render a complete INSERT ... SELECT statement.
      *
@@ -37,27 +29,22 @@ public class ProcessingPlanSqlTool {
     public RenderedProcessingSql renderInsertSelectSql(
             String taskId,
             AgentSqlGenerationContext context,
-            DslGenerationContext dslGenerationContext,
             ProcessingPlanDsl processingPlanDsl
     ) {
-        validateContext(taskId, context, dslGenerationContext);
-        ProcessingPlanDsl validatedPlan = processingPlanDslValidator.validate(
-                processingPlanDsl,
-                dslGenerationContext
-        );
-        String sql = renderSql(context, validatedPlan);
+        validateContext(taskId, context, processingPlanDsl);
+        String sql = renderSql(context, processingPlanDsl);
         return new RenderedProcessingSql(
                 taskId,
                 context.resultTable(),
                 context.stagingTable(),
-                validatedPlan.columns().stream().map(ProcessingPlanColumn::targetColumn).toList(),
+                processingPlanDsl.columns().stream().map(ProcessingPlanColumn::targetColumn).toList(),
                 sql,
                 context.loadedRows(),
-                validatedPlan
+                processingPlanDsl
         );
     }
 
-    private void validateContext(String taskId, AgentSqlGenerationContext context, DslGenerationContext dslGenerationContext) {
+    private void validateContext(String taskId, AgentSqlGenerationContext context, ProcessingPlanDsl processingPlanDsl) {
         if (context == null) {
             throw new IllegalArgumentException("SQL 生成上下文不能为空。");
         }
@@ -67,11 +54,11 @@ public class ProcessingPlanSqlTool {
         if (!taskId.equals(context.taskId())) {
             throw new IllegalArgumentException("SQL 生成上下文 taskId 与工具入参不一致。");
         }
-        if (dslGenerationContext == null) {
-            throw new IllegalArgumentException("DSL 生成上下文不能为空。");
+        if (processingPlanDsl == null) {
+            throw new IllegalArgumentException("加工计划不能为空。");
         }
-        if (!taskId.equals(dslGenerationContext.taskId())) {
-            throw new IllegalArgumentException("dslGenerationContext taskId 与工具入参不一致。");
+        if (!taskId.equals(processingPlanDsl.taskId())) {
+            throw new IllegalArgumentException("加工计划 taskId 与工具入参不一致。");
         }
         validateQualifiedTable(context.stagingTable(), "临时表名非法。");
         validateQualifiedTable(context.resultTable(), "结果表名非法。");

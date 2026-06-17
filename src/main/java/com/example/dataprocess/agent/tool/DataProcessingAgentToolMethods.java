@@ -3,6 +3,7 @@ package com.example.dataprocess.agent.tool;
 import com.example.dataprocess.agent.model.AgentConfirmationDecision;
 import com.example.dataprocess.agent.model.AgentConfirmationItem;
 import com.example.dataprocess.agent.model.AgentSqlGenerationContext;
+import com.example.dataprocess.agent.model.AgentTargetColumnContext;
 import com.example.dataprocess.agent.model.AgentUserConfirmationRequest;
 import com.example.dataprocess.agent.model.AgentWorkflowStage;
 import com.example.dataprocess.agent.model.ConfirmationType;
@@ -18,11 +19,9 @@ import com.example.dataprocess.agent.model.StandardRequiredFields;
 import com.example.dataprocess.agent.model.TemplateBundle;
 import com.example.dataprocess.agent.model.ValueSetMetadata;
 import com.example.dataprocess.domain.model.ActualColumnMapping;
-import com.example.dataprocess.domain.model.DslGenerationContext;
 import com.example.dataprocess.domain.model.ProcessingPlanDsl;
 import com.example.dataprocess.domain.model.ProcessingRule;
 import com.example.dataprocess.domain.model.ProcessingRuleItem;
-import com.example.dataprocess.domain.model.TargetColumnGenerationContext;
 import com.example.dataprocess.domain.model.TemplateRecognitionResult;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
@@ -256,7 +255,6 @@ public class DataProcessingAgentToolMethods {
         RenderedProcessingSql renderedSql = processingPlanSqlTool.renderInsertSelectSql(
                 taskId,
                 sqlGenerationContext,
-                buildDslGenerationContext(state, sqlGenerationContext),
                 processingPlanDsl
         );
         stateTool.saveTaskState(state
@@ -531,7 +529,8 @@ public class DataProcessingAgentToolMethods {
                 buildTableName("staging", state.taskId()),
                 buildTableName("result", state.taskId()),
                 parsedExcelFile.rows() == null ? 0 : parsedExcelFile.rows().size(),
-                columnMappings
+                columnMappings,
+                buildAgentTargetColumnContexts(state, columnMappings)
         );
     }
 
@@ -543,84 +542,75 @@ public class DataProcessingAgentToolMethods {
     }
 
     private List<Map<String, Object>> buildPostConfirmationBusinessContext(DataProcessingAgentState state) {
-        Map<String, List<FieldBindingItem>> bindingByTargetColumn = safeFieldBindings(state).stream()
-                .collect(Collectors.groupingBy(
-                        FieldBindingItem::targetColumn,
-                        LinkedHashMap::new,
-                        Collectors.toList()
-                ));
-
-        Map<String, Map<String, Object>> targetContexts = new LinkedHashMap<>();
-        for (ProcessingRuleItem ruleItem : state.templateBundle().processingRule().ruleItems()) {
-            List<FieldBindingItem> bindings = bindingByTargetColumn.getOrDefault(ruleItem.targetColumn(), List.of());
+        List<Map<String, Object>> targetContexts = new ArrayList<>();
+        for (FieldBindingItem bindingItem : safeFieldBindings(state)) {
+            String selectedHeader = selectedHeader(bindingItem, state.userConfirmationResult());
             Map<String, Object> item = new LinkedHashMap<>();
-            item.put("targetColumn", ruleItem.targetColumn());
-            item.put("ruleType", ruleItem.ruleType());
-            item.put("sourceColumns", ruleItem.sourceColumns());
-            item.put("selectedHeaders", selectedHeaders(bindings, state.userConfirmationResult()));
-            item.put("ruleGuide", ruleItem.ruleGuide());
-            item.put("example", ruleItem.example());
-            item.put("confirmedValue", confirmedValue(state.userConfirmationResult(), ruleItem.targetColumn()));
-            targetContexts.put(ruleItem.targetColumn(), item);
+            item.put("targetColumn", bindingItem.targetColumn());
+            item.put("ruleType", bindingItem.ruleType());
+            item.put("sourceColumn", bindingItem.sourceColumn());
+            item.put("bindingDisplayName", bindingItem.bindingDisplayName());
+            item.put("bindingStatus", bindingItem.status());
+            item.put("selectedHeader", selectedHeader);
+            item.put("confirmedValue", confirmedValue(state.userConfirmationResult(), bindingItem.targetColumn()));
+            item.put("confirmationType", confirmationType(bindingItem, state.userConfirmationResult()));
+            item.put("reason", bindingItem.reason());
+            targetContexts.add(item);
         }
 
+        Set<String> boundTargetColumns = safeFieldBindings(state).stream()
+                .map(FieldBindingItem::targetColumn)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
         for (AgentConfirmationDecision decision : safeDecisions(state.userConfirmationResult())) {
             if (decision.confirmationType() == ConfirmationType.INPUT_CONFIRMATION
-                    && !targetContexts.containsKey(decision.targetColumn())) {
+                    && !boundTargetColumns.contains(decision.targetColumn())) {
                 Map<String, Object> item = new LinkedHashMap<>();
                 item.put("targetColumn", decision.targetColumn());
                 item.put("ruleType", "USER_CONFIRM_INPUT");
-                item.put("sourceColumns", List.of());
-                item.put("selectedHeaders", List.of());
-                item.put("ruleGuide", null);
-                item.put("example", null);
+                item.put("sourceColumn", null);
+                item.put("bindingDisplayName", null);
+                item.put("bindingStatus", null);
+                item.put("selectedHeader", null);
                 item.put("confirmedValue", decision.inputValue());
-                targetContexts.put(decision.targetColumn(), item);
+                item.put("confirmationType", decision.confirmationType());
+                item.put("reason", "用户确认输入值。");
+                targetContexts.add(item);
             }
         }
 
-        return List.copyOf(targetContexts.values());
+        return List.copyOf(targetContexts);
     }
 
-    private List<String> selectedHeaders(
-            List<FieldBindingItem> bindings,
+    private ConfirmationType confirmationType(
+            FieldBindingItem binding,
             List<AgentConfirmationDecision> decisions
     ) {
-        return bindings.stream()
-                .map(binding -> selectedHeader(binding, decisions))
-                .filter(value -> value != null && !value.isBlank())
-                .distinct()
-                .toList();
+        return confirmationType(binding.targetColumn(), binding.sourceColumn(), decisions);
     }
 
-    private List<Map<String, Object>> buildDslBusinessContext(DataProcessingAgentState state) {
-        return buildTargetColumnGenerationContexts(state, List.of()).stream()
-                .map(targetContext -> {
-                    Map<String, Object> item = new LinkedHashMap<>();
-                    item.put("targetColumn", targetContext.targetColumn());
-                    item.put("ruleType", targetContext.ruleType());
-                    item.put("actualColumnMappings", targetContext.actualColumnMappings());
-                    item.put("ruleGuide", targetContext.ruleGuide());
-                    item.put("example", targetContext.example());
-                    item.put("confirmedValue", targetContext.confirmedValue());
-                    return item;
-                })
-                .toList();
-    }
-
-    private DslGenerationContext buildDslGenerationContext(
-            DataProcessingAgentState state,
-            AgentSqlGenerationContext sqlGenerationContext
+    private ConfirmationType confirmationType(
+            String targetColumn,
+            List<AgentConfirmationDecision> decisions
     ) {
-        return new DslGenerationContext(
-                state.taskId(),
-                state.templateRecognitionResult().presetTemplateCode(),
-                state.templateRecognitionResult().standardTemplateCode(),
-                buildTargetColumnGenerationContexts(state, safeColumnMappings(sqlGenerationContext))
-        );
+        return confirmationType(targetColumn, null, decisions);
     }
 
-    private List<TargetColumnGenerationContext> buildTargetColumnGenerationContexts(
+    private ConfirmationType confirmationType(
+            String targetColumn,
+            String sourceColumn,
+            List<AgentConfirmationDecision> decisions
+    ) {
+        return safeDecisions(decisions).stream()
+                .filter(decision -> targetColumn.equals(decision.targetColumn()))
+                .filter(decision -> decision.confirmationType() != ConfirmationType.MAPPING_CONFIRMATION
+                        || sourceColumn == null
+                        || sourceColumn.equals(sourceColumnFromKey(decision.confirmationKey())))
+                .map(AgentConfirmationDecision::confirmationType)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private List<AgentTargetColumnContext> buildAgentTargetColumnContexts(
             DataProcessingAgentState state,
             List<ActualColumnMapping> columnMappings
     ) {
@@ -645,32 +635,50 @@ public class DataProcessingAgentToolMethods {
                         LinkedHashMap::new
                 ));
 
-        Map<String, TargetColumnGenerationContext> targetContexts = new LinkedHashMap<>();
-        for (ProcessingRuleItem ruleItem : ruleByTargetColumn.values()) {
-            targetContexts.put(ruleItem.targetColumn(), new TargetColumnGenerationContext(
-                    ruleItem.targetColumn(),
-                    ruleItem.ruleType(),
+        Map<String, AgentTargetColumnContext> targetContexts = new LinkedHashMap<>();
+        for (Map.Entry<String, List<FieldBindingItem>> entry : bindingByTargetColumn.entrySet()) {
+            String targetColumn = entry.getKey();
+            List<FieldBindingItem> bindings = entry.getValue();
+            FieldBindingItem firstBinding = bindings.get(0);
+            ProcessingRuleItem ruleItem = ruleByTargetColumn.get(targetColumn);
+            targetContexts.put(targetColumn, new AgentTargetColumnContext(
+                    targetColumn,
+                    firstBinding.ruleType(),
+                    bindings.stream()
+                            .map(FieldBindingItem::sourceColumn)
+                            .filter(value -> value != null && !value.isBlank())
+                            .distinct()
+                            .collect(Collectors.joining(",")),
+                    firstBinding.bindingDisplayName(),
+                    firstBinding.status(),
                     resolveActualColumnMappings(
-                            bindingByTargetColumn.getOrDefault(ruleItem.targetColumn(), List.of()),
+                            bindings,
                             state.userConfirmationResult(),
                             columnMappingByActualColumn
                     ),
-                    ruleItem.ruleGuide(),
-                    ruleItem.example(),
-                    confirmedValue(state.userConfirmationResult(), ruleItem.targetColumn())
+                    ruleItem == null ? null : ruleItem.ruleGuide(),
+                    ruleItem == null ? null : ruleItem.example(),
+                    confirmedValue(state.userConfirmationResult(), targetColumn),
+                    confirmationType(targetColumn, state.userConfirmationResult()),
+                    firstBinding.reason()
             ));
         }
 
         for (AgentConfirmationDecision decision : safeDecisions(state.userConfirmationResult())) {
             if (decision.confirmationType() == ConfirmationType.INPUT_CONFIRMATION
                     && !targetContexts.containsKey(decision.targetColumn())) {
-                targetContexts.put(decision.targetColumn(), new TargetColumnGenerationContext(
+                targetContexts.put(decision.targetColumn(), new AgentTargetColumnContext(
                         decision.targetColumn(),
                         "USER_CONFIRM_INPUT",
+                        null,
+                        null,
+                        null,
                         List.of(),
                         null,
                         null,
-                        decision.inputValue()
+                        decision.inputValue(),
+                        decision.confirmationType(),
+                        "用户确认输入值。"
                 ));
             }
         }
@@ -752,12 +760,6 @@ public class DataProcessingAgentToolMethods {
 
     private List<AgentConfirmationDecision> safeDecisions(List<AgentConfirmationDecision> decisions) {
         return decisions == null ? List.of() : decisions;
-    }
-
-    private List<ActualColumnMapping> safeColumnMappings(AgentSqlGenerationContext sqlGenerationContext) {
-        return sqlGenerationContext == null || sqlGenerationContext.columnMappings() == null
-                ? List.of()
-                : sqlGenerationContext.columnMappings();
     }
 
     private List<ActualColumnMapping> buildColumnMappings(List<String> sourceHeaders) {
